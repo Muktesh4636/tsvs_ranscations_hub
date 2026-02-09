@@ -2,6 +2,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
+from rest_framework.reverse import reverse
 from django.contrib.auth import authenticate
 from django.db.models import Sum, Q
 from django.utils import timezone
@@ -15,6 +16,21 @@ from .serializers import (
     ClientExchangeAccountSerializer, TransactionSerializer
 )
 from .views import calculate_display_remaining
+
+@api_view(['GET'])
+@permission_classes([])  # Allow unauthenticated access to API root
+def api_root(request):
+    """API root endpoint - lists available API endpoints"""
+    return Response({
+        'clients': reverse('api-client-list', request=request),
+        'exchanges': reverse('api-exchange-list', request=request),
+        'accounts': reverse('api-account-list', request=request),
+        'transactions': reverse('api-transaction-list', request=request),
+        'login': reverse('api-login', request=request),
+        'mobile-dashboard': reverse('api-mobile-dashboard', request=request),
+        'pending-payments': reverse('api-pending-payments', request=request),
+        'message': 'API endpoints require authentication. Use /api/login/ to obtain a token.',
+    })
 
 @api_view(['GET', 'POST'])
 @permission_classes([permissions.IsAuthenticated])
@@ -724,6 +740,105 @@ def api_reports_summary(request):
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
+def api_export_reports_csv(request):
+    """Export general reports (daily, weekly, monthly) as CSV for mobile app."""
+    period = request.query_params.get('period', 'DAILY')
+    accounts = ClientExchangeAccount.objects.filter(client__user=request.user)
+    today = timezone.now().date()
+
+    start_date = today
+    if period == 'WEEKLY':
+        start_date = today - timedelta(days=7)
+    elif period == 'MONTHLY':
+        start_date = today - timedelta(days=30)
+    
+    response = HttpResponse(content_type='text/csv')
+    filename = f"report_{period.lower()}_{date.today().strftime('%Y%m%d')}.csv"
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    writer = csv.writer(response)
+
+    # Write overview data
+    writer.writerow(['Report Period', period])
+    writer.writerow(['Report Date', date.today().isoformat()])
+    writer.writerow([])
+
+    total_funding = accounts.aggregate(Sum('funding'))['funding__sum'] or 0
+    total_balance = accounts.aggregate(Sum('exchange_balance'))['exchange_balance__sum'] or 0
+    total_pnl = sum(acc.compute_client_pnl() for acc in accounts)
+    total_my_share = sum(acc.compute_my_share() for acc in accounts)
+    
+    my_own_total_share = 0
+    friend_total_share = 0
+    
+    for acc in accounts:
+        try:
+            config = ClientExchangeReportConfig.objects.get(client_exchange=acc)
+            acc_my_share = acc.compute_my_share()
+            if acc_my_share > 0:
+                total_config_pct = float(config.my_own_percentage + config.friend_percentage)
+                if total_config_pct > 0:
+                    my_own_total_share += int((acc_my_share * float(config.my_own_percentage)) / total_config_pct)
+                    friend_total_share += int((acc_my_share * float(config.friend_percentage)) / total_config_pct)
+                else:
+                    my_own_total_share += acc_my_share
+        except ClientExchangeReportConfig.DoesNotExist:
+            my_own_total_share += acc.compute_my_share()
+
+    writer.writerow(['Overview'])
+    writer.writerow(['Total Funding', total_funding])
+    writer.writerow(['Total Balance', total_balance])
+    writer.writerow(['Total PnL', total_pnl])
+    writer.writerow(['Total My Share', total_my_share])
+    writer.writerow(['My Own Share', my_own_total_share])
+    writer.writerow(['Friend Share', friend_total_share])
+    writer.writerow([])
+
+    # Daily Performance (last 7 days)
+    writer.writerow(['Daily Performance (Last 7 Days)'])
+    writer.writerow(['Date', 'PnL', 'Transactions Count'])
+    for i in range(7):
+        day = today - timedelta(days=i)
+        day_txns = Transaction.objects.filter(
+            client_exchange__client__user=request.user,
+            date__date=day
+        )
+        day_pnl = 0
+        for tx in day_txns:
+            if tx.type == 'TRADE':
+                if tx.exchange_balance_before is not None and tx.exchange_balance_after is not None:
+                    day_pnl += (tx.exchange_balance_after - tx.exchange_balance_before)
+        if day_txns.exists():
+            writer.writerow([day.strftime('%Y-%m-%d'), day_pnl, day_txns.count()])
+    writer.writerow([])
+
+    # Client Performance for the selected period
+    writer.writerow(['Client Performance (Selected Period)'])
+    writer.writerow(['Client Name', 'Client Code', 'PnL', 'Settlements', 'Transactions Count'])
+    period_txns = Transaction.objects.filter(
+        client_exchange__client__user=request.user,
+        date__date__gte=start_date,
+        date__date__lte=today
+    )
+    client_ids = accounts.values_list('client_id', flat=True).distinct()
+    for cid in client_ids:
+        client = Client.objects.get(id=cid)
+        client_txns = period_txns.filter(client_exchange__client_id=cid)
+        client_pnl = 0
+        client_settlements = 0
+        for tx in client_txns:
+            if tx.type == 'TRADE':
+                if tx.exchange_balance_before is not None and tx.exchange_balance_after is not None:
+                    client_pnl += (tx.exchange_balance_after - tx.exchange_balance_before)
+            elif tx.type in ['SETTLEMENT_SHARE', 'RECORD_PAYMENT']:
+                client_settlements += tx.amount
+        if client_txns.exists():
+            writer.writerow([client.name, client.code, client_pnl, client_settlements, client_txns.count()])
+    writer.writerow([])
+
+    return response
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
 def api_custom_reports(request):
     """Custom date range reports"""
     from_date_str = request.query_params.get('from_date')
@@ -882,16 +997,72 @@ def api_link_exchange(request):
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def api_create_exchange(request):
+    """
+    API endpoint to create a new exchange.
+    Expected fields: name (required), version (optional), code (optional)
+    """
     try:
-        name = request.data.get('name')
-        version = request.data.get('version', '')
-        code = request.data.get('code', '')
+        name = request.data.get('name', '').strip()
+        version = request.data.get('version', '').strip() or None
+        code = request.data.get('code', '').strip() or None
         
-        exchange = Exchange.objects.create(name=name, version_name=version, code=code)
-        return Response({'status': 'success', 'id': exchange.id})
+        # Validate name is provided
+        if not name:
+            return Response({'error': 'Exchange name is required'}, status=400)
+        
+        # Check for duplicate name (case-insensitive) before creating
+        existing = Exchange.objects.filter(name__iexact=name)
+        if existing.exists():
+            return Response({'error': f"Exchange '{name}' already exists"}, status=400)
+        
+        # Check for duplicate code if code is provided (code has unique constraint)
+        if code:
+            existing_code = Exchange.objects.filter(code=code)
+            if existing_code.exists():
+                return Response({'error': f"Exchange code '{code}' already exists"}, status=400)
+        
+        # Create exchange with proper field mapping
+        # Note: Empty strings are converted to None to avoid unique constraint issues
+        exchange = Exchange(
+            name=name,
+            version_name=version if version else None,
+            code=code if code else None
+        )
+        
+        # Call full_clean to trigger model validation
+        exchange.full_clean()
+        exchange.save()
+        
+        return Response({
+            'status': 'success',
+            'id': exchange.id,
+            'name': exchange.name,
+            'code': exchange.code,
+            'version_name': exchange.version_name
+        })
     except Exception as e:
-        print(f"DEBUG API CREATE EXCHANGE ERROR: {str(e)}")
-        return Response({'error': str(e)}, status=400)
+        import traceback
+        error_msg = str(e)
+        print(f"DEBUG API CREATE EXCHANGE ERROR: {error_msg}")
+        print(traceback.format_exc())
+        
+        # Provide more specific error messages
+        if 'unique' in error_msg.lower() or 'duplicate' in error_msg.lower() or 'already exists' in error_msg.lower():
+            if 'code' in error_msg.lower():
+                return Response({'error': f"Exchange code '{code}' already exists"}, status=400)
+            else:
+                return Response({'error': f"Exchange '{name}' already exists"}, status=400)
+        elif 'validation' in error_msg.lower():
+            # Extract validation error message
+            if hasattr(e, 'message_dict'):
+                errors = []
+                for field, msgs in e.message_dict.items():
+                    errors.extend(msgs)
+                return Response({'error': ' '.join(errors)}, status=400)
+            else:
+                return Response({'error': f"Validation error: {error_msg}"}, status=400)
+        else:
+            return Response({'error': f"Error creating exchange: {error_msg}"}, status=400)
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])

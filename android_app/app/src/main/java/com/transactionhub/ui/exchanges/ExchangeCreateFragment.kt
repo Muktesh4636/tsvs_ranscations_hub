@@ -53,10 +53,25 @@ class ExchangeCreateFragment : Fragment() {
                     Toast.makeText(context, "Exchange Added!", Toast.LENGTH_SHORT).show()
                     parentFragmentManager.popBackStack()
                 } else {
-                    Toast.makeText(context, "Error adding exchange", Toast.LENGTH_SHORT).show()
+                    // Try to extract error message from response
+                    val errorBody = response.errorBody()?.string()
+                    val errorMessage = if (errorBody != null) {
+                        try {
+                            // Try to parse JSON error response
+                            val json = org.json.JSONObject(errorBody)
+                            json.optString("error", "Error adding exchange")
+                        } catch (e: Exception) {
+                            "Error adding exchange"
+                        }
+                    } else {
+                        "Error adding exchange"
+                    }
+                    Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
+                    android.util.Log.e("ExchangeCreate", "Error: ${response.code()} - $errorBody")
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, "Network error", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Network error: ${e.message}", Toast.LENGTH_LONG).show()
+                android.util.Log.e("ExchangeCreate", "Exception", e)
             }
         }
     }

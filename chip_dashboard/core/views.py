@@ -5848,4 +5848,21 @@ def client_balance(request, client_pk):
     return render(request, "core/clients/balance.html", context)
 
 
+def download_apk(request):
+    """Serve APK file for download."""
+    import os
+    from django.http import HttpResponse, Http404
+    from django.conf import settings
 
+    # Path to the APK file
+    apk_path = os.path.join(settings.BASE_DIR, 'static', 'apk', 'app-debug.apk')
+
+    # Check if file exists
+    if not os.path.exists(apk_path):
+        raise Http404("APK file not found")
+
+    # Open and serve the file
+    with open(apk_path, 'rb') as apk_file:
+        response = HttpResponse(apk_file.read(), content_type='application/vnd.android.package-archive')
+        response['Content-Disposition'] = 'attachment; filename="chip_trading_app.apk"'
+        return response

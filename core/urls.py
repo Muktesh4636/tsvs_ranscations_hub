@@ -2,17 +2,31 @@
 URL configuration for core app
 """
 from django.urls import path, include
+from django.http import HttpResponseRedirect
 from rest_framework.routers import DefaultRouter
 from . import views, api_views
 
 # API Router
 router = DefaultRouter()
-router.register(r'api/clients', api_views.ClientViewSet, basename='api-client')
-router.register(r'api/exchanges', api_views.ExchangeViewSet, basename='api-exchange')
-router.register(r'api/accounts', api_views.ClientExchangeAccountViewSet, basename='api-account')
-router.register(r'api/transactions', api_views.TransactionViewSet, basename='api-transaction')
+router.register(r'clients', api_views.ClientViewSet, basename='api-client')
+router.register(r'exchanges', api_views.ExchangeViewSet, basename='api-exchange')
+router.register(r'accounts', api_views.ClientExchangeAccountViewSet, basename='api-account')
+router.register(r'transactions', api_views.TransactionViewSet, basename='api-transaction')
+
+def root_redirect(request):
+    """Redirect root URL to dashboard"""
+    return HttpResponseRedirect('/dashboard/')
 
 urlpatterns = [
+    # Root redirect to dashboard
+    path('', root_redirect, name='root-redirect'),
+
+    # Health check for monitoring
+    path('health/', views.health_check, name='health_check'),
+
+    # API Root (public access) - now at /api/ instead of root
+    path('api/', api_views.api_root, name='api-root'),
+
     # API Routes
     path('api/login/', api_views.api_login, name='api-login'),
     path('api/mobile-dashboard/', api_views.mobile_dashboard_summary, name='api-mobile-dashboard'),
@@ -30,7 +44,7 @@ urlpatterns = [
     path('api/accounts/<int:account_id>/settings/', api_views.api_update_account_settings, name='api-account-settings'),
     path('api/accounts/<int:account_id>/report-config/', api_views.api_account_report_config, name='api-account-report-config'),
     path('api/clients/<int:pk>/delete/', api_views.api_delete_client, name='api-client-delete-mobile'),
-    path('', include(router.urls)),
+    path('api/', include(router.urls)),  # Changed from '' to 'api/' to avoid conflict
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
     path('api/token-auth/', include('rest_framework.urls')), # Simplified for token login later
 
@@ -42,7 +56,7 @@ urlpatterns = [
     path('resend-otp/', views.resend_otp_view, name='resend_otp'),
     
     # Dashboard
-    path('', views.dashboard, name='dashboard'),
+    path('dashboard/', views.dashboard, name='dashboard'),
     
     # Clients
     path('clients/', views.client_list, name='client_list'),
@@ -71,6 +85,7 @@ urlpatterns = [
     # Pending Payments
     path('pending/', views.pending_summary, name='pending_summary'),
     path('pending/export/', views.export_pending_csv, name='export_pending_csv'),
+    path('pending/export/<int:client_id>/', views.export_client_pending_csv, name='export_client_pending_csv'),
     
     # Reports
     path('reports/', views.report_overview, name='report_overview'),
@@ -79,8 +94,12 @@ urlpatterns = [
     path('reports/monthly/', views.report_monthly, name='report_monthly'),
     path('reports/custom/', views.report_custom, name='report_custom'),
     path('api/reports/custom/', api_views.api_custom_reports, name='api-custom-reports'),
+    path('api/reports/export/', api_views.api_export_reports_csv, name='api-export-reports-csv'),
     path('reports/client/<int:pk>/', views.report_client, name='report_client'),
     path('reports/exchange/<int:pk>/', views.report_exchange, name='report_exchange'),
     path('reports/time-travel/', views.report_time_travel, name='report_time_travel'),
+
+    # APK Downloads
+    path('download/apk/', views.download_apk, name='download_apk'),
 ]
 

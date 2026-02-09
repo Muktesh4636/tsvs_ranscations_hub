@@ -36,6 +36,9 @@
             <a href="{% url 'export_pending_csv' %}{% if search_query %}?search={{ search_query|urlencode }}{% endif %}" class="btn btn-primary" style="background: var(--success);">
                 📥 Download CSV
             </a>
+            <button onclick="shareViaWhatsApp('{% url 'export_pending_csv' %}{% if search_query %}?search={{ search_query|urlencode }}{% endif %}')" class="btn btn-success" style="background: #25d366; border: none; margin-left: 8px;">
+                📱 WhatsApp
+            </button>
         </div>
     </div>
         </div>
@@ -244,6 +247,30 @@ function showSection(section) {
         document.getElementById('btn-you-owe').classList.add('btn-primary');
         document.getElementById('btn-you-owe').style.background = 'var(--accent)';
     }
+}
+
+function shareViaWhatsApp(csvUrl) {
+    // Create a message for WhatsApp
+    const message = encodeURIComponent("Please find the pending payments report attached.");
+
+    // WhatsApp URL with phone number
+    const whatsappUrl = `https://wa.me/9182351381?text=${message}`;
+
+    // First download the CSV file
+    const link = document.createElement('a');
+    link.href = csvUrl;
+    link.download = 'pending_payments.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Then open WhatsApp after a short delay to allow download to start
+    setTimeout(() => {
+        window.open(whatsappUrl, '_blank');
+    }, 1000);
+
+    // Show a helpful message
+    alert('CSV file has been downloaded. Please attach it manually to your WhatsApp message.');
 }
 </script>
 {% endblock %}

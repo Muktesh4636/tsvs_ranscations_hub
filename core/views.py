@@ -37,6 +37,33 @@ from .models import (
     )
 from .forms import SignupForm, OTPVerificationForm
 
+# Health check view for monitoring
+def health_check(request):
+    """
+    Health check endpoint for load balancers and monitoring systems.
+    Returns 200 OK with basic system status.
+    """
+    from django.db import connection
+
+    try:
+        # Test database connection
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            db_status = "healthy"
+    except Exception:
+        db_status = "unhealthy"
+
+    # Basic system info
+    status = {
+        "status": "healthy" if db_status == "healthy" else "unhealthy",
+        "database": db_status,
+        "timestamp": timezone.now().isoformat(),
+        "service": "chip-broker-portal"
+    }
+
+    response_status = 200 if status["status"] == "healthy" else 503
+    return JsonResponse(status, status=response_status)
+
 # TODO: core.utils.money module removed - add back if needed
 # Placeholder functions
 def round_share(value):
@@ -1670,6 +1697,12 @@ def pending_summary(request):
     clients_owe_list = []  # Clients Need To Pay Me
     you_owe_list = []  # I Need To Pay Clients
     
+    # WhatsApp number for all clients (requested by user)
+    whatsapp_number = "9182351381"
+    
+    # Sort client_exchanges by client name to group them
+    client_exchanges = client_exchanges.order_by('client__name', 'exchange__name')
+    
     for client_exchange in client_exchanges:
         # Compute Client_PnL using PIN-TO-PIN formula
         client_pnl = client_exchange.compute_client_pnl()
@@ -1802,22 +1835,25 @@ def pending_summary(request):
             })
             continue
     
-    # Sort lists by amount (descending)
-    # Sort by Final Share or amount_owed, handling N.A cases
+    # Sort lists by client name first, then by amount (descending)
     def get_sort_key(item):
+        client_name = item["client"].name.lower()
         if item.get("show_na", False):
-            return 0  # N.A items sort to bottom
-        if "my_share_amount" in item:
-            return abs(item["my_share_amount"])
+            amount = 0
+        elif "my_share_amount" in item:
+            amount = abs(item["my_share_amount"])
         elif "amount_owed" in item:
-            return abs(item["amount_owed"])
+            amount = abs(item["amount_owed"])
         elif "client_pnl" in item:
-            return abs(item["client_pnl"])
+            amount = abs(item["client_pnl"])
         else:
-            return 0
+            amount = 0
+        # Primary sort by client name, secondary by amount (descending)
+        # We use a tuple (client_name, -amount)
+        return (client_name, -float(amount))
     
-    clients_owe_list.sort(key=get_sort_key, reverse=True)
-    you_owe_list.sort(key=get_sort_key, reverse=True)
+    clients_owe_list.sort(key=get_sort_key)
+    you_owe_list.sort(key=get_sort_key)
     
     # Calculate totals (using remaining amounts for settlement tracking)
     total_clients_owe = sum(item.get("amount_owed", 0) for item in clients_owe_list)
@@ -1847,6 +1883,7 @@ def pending_summary(request):
         "combine_shares": combine_shares,
         "search_query": search_query,
         "all_clients": all_clients,
+        "whatsapp_number": whatsapp_number,
     }
     return render(request, "core/pending/summary.html", context)
 
@@ -2028,11 +2065,11 @@ def export_pending_csv(request):
     
     writer = csv.writer(response)
     
-    # Write header row - Matching table column order: Client, U_CODE, Master, OPENING POINTS, AVL.POINTS(CLOSING POINTS), PROFIT(+)/LOSS(-), MY SHARE, MY%
+    # Write header row - Matching table column order: Period, Master, U_CODE, OPENING POINTS, AVL.POINTS(CLOSING POINTS), PROFIT(+)/LOSS(-), MY SHARE, MY%
     headers = [
-        'Client',
-        'U_CODE',
+        'Period',
         'Master',
+        'U_CODE',
         'OPENING POINTS',
         'AVL.POINTS(CLOSING POINTS)',
         'PROFIT(+)/LOSS(-)',
@@ -2041,13 +2078,20 @@ def export_pending_csv(request):
     ]
     writer.writerow(headers)
     
+    today_str = date.today().strftime('%Y-%m-%d')
+    
     # Write Clients Owe You section (if requested)
     if section in ["all", "clients-owe"]:
+        # Sort by client name to group them for Period/U_CODE logic
+        clients_owe_list.sort(key=lambda x: (x["client"].name.lower(), -abs(x["client_pnl"])))
+        
+        last_client_id = None
         for item in clients_owe_list:
+            is_new_client = item["client"].pk != last_client_id
             row_data = [
-                item["client"].name or '',
-                item["client"].code or '',
-                item["exchange"].name or '',
+                today_str if is_new_client else '',
+                f'{item["exchange"].name}{f" ({item["exchange"].code})" if item["exchange"].code else ""}',
+                (item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-')) if is_new_client else '',
                 int(item["account"].funding),
                 int(item["account"].exchange_balance),
                 'N.A' if item.get("show_na", False) else int(item["client_pnl"]),
@@ -2055,14 +2099,20 @@ def export_pending_csv(request):
                 item.get("share_percentage", item["account"].my_percentage)
             ]
             writer.writerow(row_data)
-    
+            last_client_id = item["client"].pk
+            
     # Write You Owe Clients section (if requested)
     if section in ["all", "you-owe"]:
+        # Sort by client name to group them for Period/U_CODE logic
+        you_owe_list.sort(key=lambda x: (x["client"].name.lower(), -abs(x["client_pnl"])))
+        
+        last_client_id = None
         for item in you_owe_list:
+            is_new_client = item["client"].pk != last_client_id
             row_data = [
-                item["client"].name or '',
-                item["client"].code or '',
-                item["exchange"].name or '',
+                today_str if is_new_client else '',
+                f'{item["exchange"].name}{f" ({item["exchange"].code})" if item["exchange"].code else ""}',
+                (item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-')) if is_new_client else '',
                 int(item["account"].funding),
                 int(item["account"].exchange_balance),
                 'N.A' if item.get("show_na", False) else int(item["client_pnl"]),
@@ -2070,7 +2120,207 @@ def export_pending_csv(request):
                 item.get("share_percentage", item["account"].my_percentage)
             ]
             writer.writerow(row_data)
+            last_client_id = item["client"].pk
     
+    return response
+
+
+@login_required
+def export_client_pending_csv(request, client_id):
+    """
+    Export pending payments report for a specific client as CSV.
+    """
+    import csv
+
+    # WhatsApp number for all clients (requested by user)
+    whatsapp_number = "9182351381"
+
+    # Get the specific client
+    client = get_object_or_404(Client, pk=client_id, user=request.user)
+
+    # Get all client exchanges for this specific client
+    client_exchanges = ClientExchangeAccount.objects.filter(
+        client=client,
+        client__user=request.user
+    ).select_related("client", "exchange")
+
+    # Use EXACT same data building logic as pending_summary
+    clients_owe_list = []
+    you_owe_list = []
+
+    for client_exchange in client_exchanges:
+        # Compute Client_PnL using PIN-TO-PIN formula
+        client_pnl = client_exchange.compute_client_pnl()
+
+        # Determine if client owes you or you owe client
+        is_loss_case = client_pnl < 0  # Client owes you (loss)
+        is_profit_case = client_pnl > 0  # You owe client (profit)
+        is_neutral_case = client_pnl == 0  # Neutral (funding == exchange_balance)
+
+        # Handle neutral case (PnL = 0): Show with N.A
+        if is_neutral_case:
+            # Client MUST always appear in pending list, even when PnL = 0
+            # Show in "Clients Owe You" section with N.A
+            client_exchange.lock_initial_share_if_needed()
+            settlement_info = client_exchange.get_remaining_settlement_amount()
+            initial_final_share = settlement_info['initial_final_share']
+            remaining_amount = settlement_info['remaining']
+
+            # Use initial locked share for display
+            final_share = initial_final_share if initial_final_share > 0 else client_exchange.compute_my_share()
+
+            # Use helper method to get appropriate share percentage
+            share_pct = client_exchange.get_share_percentage(client_pnl)
+
+            # Add to list with N.A
+            clients_owe_list.append({
+                "client": client_exchange.client,
+                "exchange": client_exchange.exchange,
+                "account": client_exchange,
+                "client_pnl": client_pnl,  # Will be 0
+                "amount_owed": 0,  # No amount owed when PnL = 0
+                "my_share_amount": final_share,  # Final share (will show as N.A)
+                "remaining_amount": remaining_amount,  # Remaining = 0 (will show as N.A)
+                "share_percentage": share_pct,
+                "show_na": True,  # Flag for N.A display
+            })
+            continue
+
+        if is_loss_case:
+            # This is the "Clients Owe You" section
+
+            # CRITICAL FIX: Lock share and use locked share for remaining calculation
+            client_exchange.lock_initial_share_if_needed()
+            settlement_info = client_exchange.get_remaining_settlement_amount()
+            initial_final_share = settlement_info['initial_final_share']
+            remaining_amount = settlement_info['remaining']
+            overpaid_amount = settlement_info['overpaid']
+
+            # Use initial locked share for display
+            final_share = initial_final_share if initial_final_share > 0 else client_exchange.compute_my_share()
+
+            # MASKED SHARE SETTLEMENT SYSTEM: Client MUST always appear in pending list
+            # If FinalShare = 0, show N.A instead of filtering out
+            show_na = final_share == 0
+
+            # Use helper method to get appropriate share percentage
+            share_pct = client_exchange.get_share_percentage(client_pnl)
+
+            # Add to list
+            clients_owe_list.append({
+                "client": client_exchange.client,
+                "exchange": client_exchange.exchange,
+                "account": client_exchange,
+                "client_pnl": client_pnl,
+                "amount_owed": abs(client_pnl),
+                "my_share_amount": final_share,
+                "remaining_amount": remaining_amount,
+                "share_percentage": share_pct,
+                "show_na": show_na,  # Flag for N.A display
+            })
+            continue
+
+        if is_profit_case:
+            # This is the "You Owe Clients" section
+
+            # CRITICAL FIX: Lock share and use locked share for remaining calculation
+            client_exchange.lock_initial_share_if_needed()
+            settlement_info = client_exchange.get_remaining_settlement_amount()
+            initial_final_share = settlement_info['initial_final_share']
+            remaining_amount = settlement_info['remaining']
+            overpaid_amount = settlement_info['overpaid']
+
+            # Use initial locked share for display
+            final_share = initial_final_share if initial_final_share > 0 else client_exchange.compute_my_share()
+
+            # MASKED SHARE SETTLEMENT SYSTEM: Client MUST always appear in pending list
+            # If FinalShare = 0, show N.A instead of filtering out
+            show_na = final_share == 0
+
+            # Use helper method to get appropriate share percentage
+            share_pct = client_exchange.get_share_percentage(client_pnl)
+
+            # Add to list
+            you_owe_list.append({
+                "client": client_exchange.client,
+                "exchange": client_exchange.exchange,
+                "account": client_exchange,
+                "client_pnl": client_pnl,
+                "amount_owed": abs(client_pnl),
+                "my_share_amount": final_share,
+                "remaining_amount": remaining_amount,
+                "share_percentage": share_pct,
+                "show_na": show_na,  # Flag for N.A display
+            })
+            continue
+
+    # Sort lists by amount (descending)
+    # Sort by Final Share or amount_owed, handling N.A cases
+    def get_sort_key(item):
+        if item.get("show_na", False):
+            return 0  # N.A items sort to bottom
+        if "my_share_amount" in item:
+            return abs(item["my_share_amount"])
+        elif "amount_owed" in item:
+            return abs(item["amount_owed"])
+        elif "client_pnl" in item:
+            return abs(item["client_pnl"])
+        else:
+            return 0
+
+    clients_owe_list.sort(key=get_sort_key, reverse=True)
+    you_owe_list.sort(key=get_sort_key, reverse=True)
+
+    # Create CSV response
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="{client.name}_pending_payments.csv"'
+
+    writer = csv.writer(response)
+
+    # Write header for "Clients Owe You" section
+    if clients_owe_list:
+        writer.writerow(['=== CLIENTS OWE YOU ==='])
+        writer.writerow([])
+        writer.writerow(['Period', 'Master', 'U_CODE', 'OPENING POINTS', 'AVL.POINTS(CLOSING POINTS)', 'PROFIT(+)/LOSS(-)', 'MY SHARE', 'MY%', 'Status'])
+
+        today_str = timezone.now().strftime('%Y-%m-%d')
+        for i, item in enumerate(clients_owe_list):
+            row_data = [
+                today_str if i == 0 else '',
+                f'{item["exchange"].name}{f" ({item["exchange"].code})" if item["exchange"].code else ""}',
+                (item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-')) if i == 0 else '',
+                f'{item["account"].funding:.2f}',
+                f'{item["account"].exchange_balance:.2f}',
+                'N.A' if item.get("show_na", False) else f'{item["client_pnl"]:.2f}',
+                'N.A' if item.get("show_na", False) else f'{item["remaining_amount"]:.2f}',
+                f'{item.get("share_percentage", item["account"].my_percentage)}%',
+                'Pending' if not item.get("show_na", False) else 'Settled'
+            ]
+            writer.writerow(row_data)
+        writer.writerow([])
+
+    # Write header for "You Owe Clients" section
+    if you_owe_list:
+        writer.writerow(['=== YOU OWE CLIENTS ==='])
+        writer.writerow([])
+        writer.writerow(['Period', 'Master', 'U_CODE', 'OPENING POINTS', 'AVL.POINTS(CLOSING POINTS)', 'PROFIT(+)/LOSS(-)', 'MY SHARE', 'MY%', 'Status'])
+
+        today_str = timezone.now().strftime('%Y-%m-%d')
+        for i, item in enumerate(you_owe_list):
+            row_data = [
+                today_str if i == 0 else '',
+                f'{item["exchange"].name}{f" ({item["exchange"].code})" if item["exchange"].code else ""}',
+                (item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-')) if i == 0 else '',
+                f'{item["account"].funding:.2f}',
+                f'{item["account"].exchange_balance:.2f}',
+                'N.A' if item.get("show_na", False) else f'{item["client_pnl"]:.2f}',
+                'N.A' if item.get("show_na", False) else f'{item["remaining_amount"]:.2f}',
+                f'{item.get("share_percentage", item["account"].my_percentage)}%',
+                'Pending' if not item.get("show_na", False) else 'Settled'
+            ]
+            writer.writerow(row_data)
+        writer.writerow([])
+
     return response
 
 
@@ -5797,4 +6047,21 @@ def client_balance(request, client_pk):
     return render(request, "core/clients/balance.html", context)
 
 
+def download_apk(request):
+    """Serve APK file for download."""
+    import os
+    from django.http import HttpResponse, Http404
+    from django.conf import settings
 
+    # Path to the APK file
+    apk_path = os.path.join(settings.BASE_DIR, 'static', 'apk', 'app-debug.apk')
+
+    # Check if file exists
+    if not os.path.exists(apk_path):
+        raise Http404("APK file not found")
+
+    # Open and serve the file
+    with open(apk_path, 'rb') as apk_file:
+        response = HttpResponse(apk_file.read(), content_type='application/vnd.android.package-archive')
+        response['Content-Disposition'] = 'attachment; filename="chip_trading_app.apk"'
+        return response

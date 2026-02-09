@@ -54,5 +54,8 @@ urlpatterns = [
     path('reports/exchange/<int:pk>/', views.report_exchange, name='report_exchange'),
     path('reports/time-travel/', views.report_time_travel, name='report_time_travel'),
     path('reports/export/', views.export_report_csv, name='export_report_csv'),
+
+    # APK Downloads
+    path('download/apk/', views.download_apk, name='download_apk'),
 ]
 

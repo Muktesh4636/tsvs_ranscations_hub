@@ -36,6 +36,9 @@
             <a href="{% url 'export_pending_csv' %}{% if search_query %}?search={{ search_query|urlencode }}{% endif %}" class="btn btn-primary" style="background: var(--success);">
                 📥 Download CSV
             </a>
+            <button onclick="shareViaWhatsApp('{% url 'export_pending_csv' %}{% if search_query %}?search={{ search_query|urlencode }}{% endif %}')" class="btn btn-success" style="background: #25d366; border: none; margin-left: 8px;">
+                📱 WhatsApp
+            </button>
         </div>
     </div>
         </div>
@@ -68,7 +71,7 @@
             <table style="min-width: max-content; width: 100%;">
             <thead>
             <tr>
-                <th>Client</th>
+                <th>Period</th>
                 <th>U_CODE</th>
                 <th>Master</th>
                 <th>OPENING POINTS</th>
@@ -83,16 +86,20 @@
                 {% for item in clients_owe_you %}
                 <tr>
                     <td>
-                        <a href="{% url 'client_detail' item.client.pk %}" style="color: var(--accent); text-decoration: none;">
-                            {{ item.client.name }}
-                        </a>
+                        {% ifchanged item.client.pk %}
+                            {{ today|date:"Y-m-d" }}
+                        {% endifchanged %}
                     </td>
                     <td>
-                        {% if item.client.code %}
-                            <span style="color: var(--muted); font-size: 13px;">{{ item.client.code }}</span>
-                        {% else %}
-                            <span style="color: var(--muted); font-size: 13px;">-</span>
-                        {% endif %}
+                        {% ifchanged item.client.pk %}
+                            {% if item.client.name == "VENU" %}
+                                VENU
+                            {% elif item.client.code %}
+                                <span style="color: var(--muted); font-size: 13px;">{{ item.client.code }}</span>
+                            {% else %}
+                                <span style="color: var(--muted); font-size: 13px;">-</span>
+                            {% endif %}
+                        {% endifchanged %}
                     </td>
                     <td>{{ item.exchange.name }}{% if item.exchange.code %} ({{ item.exchange.code }}){% endif %}</td>
                     <td>{{ item.account.funding|currency_inr }}</td>
@@ -116,7 +123,13 @@
                         {% if not item.show_na %}
                             <a href="{% url 'record_payment' item.account.pk %}?redirect_to=pending_summary" class="btn btn-sm btn-primary" style="margin-right: 4px;">Record Payment</a>
                         {% endif %}
-                        <a href="{% url 'exchange_account_detail' item.account.pk %}" class="btn btn-sm">View Account</a>
+                        <a href="{% url 'exchange_account_detail' item.account.pk %}" class="btn btn-sm" style="margin-right: 4px;">View Account</a>
+                        <a href="{% url 'export_client_pending_csv' item.client.pk %}" class="btn btn-sm" style="background: var(--success); color: white;" title="Download CSV for {{ item.client.name }}">📥 CSV</a>
+                        {% ifchanged item.client.pk %}
+                            <button onclick="shareClientViaWhatsApp('{{ item.client.name }}', '{% url 'export_client_pending_csv' item.client.pk %}')" class="btn btn-sm" style="background: #25D366; color: white; margin-left: 4px;" title="Send WhatsApp to {{ item.client.name }}">
+                                🟢 WhatsApp
+                            </button>
+                        {% endifchanged %}
                     </td>
                 </tr>
             {% endfor %}
@@ -128,7 +141,7 @@
             <div style="font-size: 16px; margin-bottom: 8px;">No clients owe you</div>
             <div style="font-size: 14px;">All clients are either settled or in profit</div>
 </div>
-            {% endif %}
+                    {% endif %}
         </div>
     </div>
 
@@ -140,13 +153,13 @@
             These clients are in PROFIT. You owe them settlement amounts.
             Remaining to settle: {{ total_my_share_you_owe|currency_inr }}.
         </p>
-        
+
         {% if you_owe_clients %}
         <div class="table-wrapper" style="overflow-x: auto; overflow-y: visible; width: 100%; -webkit-overflow-scrolling: touch;">
             <table style="min-width: max-content; width: 100%;">
             <thead>
             <tr>
-                <th>Client</th>
+                <th>Period</th>
                 <th>U_CODE</th>
                 <th>Master</th>
                 <th>OPENING POINTS</th>
@@ -161,16 +174,20 @@
                 {% for item in you_owe_clients %}
                 <tr>
                     <td>
-                        <a href="{% url 'client_detail' item.client.pk %}" style="color: var(--accent); text-decoration: none;">
-                            {{ item.client.name }}
-                        </a>
+                        {% ifchanged item.client.pk %}
+                            {{ today|date:"Y-m-d" }}
+                        {% endifchanged %}
                     </td>
                     <td>
-                        {% if item.client.code %}
-                            <span style="color: var(--muted); font-size: 13px;">{{ item.client.code }}</span>
-                        {% else %}
-                            <span style="color: var(--muted); font-size: 13px;">-</span>
-                        {% endif %}
+                        {% ifchanged item.client.pk %}
+                            {% if item.client.name == "VENU" %}
+                                VENU
+                            {% elif item.client.code %}
+                                <span style="color: var(--muted); font-size: 13px;">{{ item.client.code }}</span>
+                            {% else %}
+                                <span style="color: var(--muted); font-size: 13px;">-</span>
+                            {% endif %}
+                        {% endifchanged %}
                     </td>
                     <td>{{ item.exchange.name }}{% if item.exchange.code %} ({{ item.exchange.code }}){% endif %}</td>
                     <td>{{ item.account.funding|currency_inr }}</td>
@@ -194,7 +211,13 @@
                         {% if not item.show_na %}
                             <a href="{% url 'record_payment' item.account.pk %}?redirect_to=pending_summary" class="btn btn-sm btn-primary" style="margin-right: 4px;">Record Payment</a>
                         {% endif %}
-                        <a href="{% url 'exchange_account_detail' item.account.pk %}" class="btn btn-sm">View Account</a>
+                        <a href="{% url 'exchange_account_detail' item.account.pk %}" class="btn btn-sm" style="margin-right: 4px;">View Account</a>
+                        <a href="{% url 'export_client_pending_csv' item.client.pk %}" class="btn btn-sm" style="background: var(--success); color: white;" title="Download CSV for {{ item.client.name }}">📥 CSV</a>
+                        {% ifchanged item.client.pk %}
+                            <button onclick="shareClientViaWhatsApp('{{ item.client.name }}', '{% url 'export_client_pending_csv' item.client.pk %}')" class="btn btn-sm" style="background: #25D366; color: white; margin-left: 4px;" title="Send WhatsApp to {{ item.client.name }}">
+                                🟢 WhatsApp
+                            </button>
+                        {% endifchanged %}
                     </td>
                 </tr>
             {% endfor %}
@@ -232,6 +255,84 @@ function showSection(section) {
         document.getElementById('btn-you-owe').classList.add('btn-primary');
         document.getElementById('btn-you-owe').style.background = 'var(--accent)';
     }
+}
+
+function shareViaWhatsApp(csvUrl) {
+    // Create a message for WhatsApp
+    const message = encodeURIComponent("Please find the pending payments report attached.");
+
+    // WhatsApp URL with phone number
+    const whatsappUrl = `https://wa.me/9182351381?text=${message}`;
+
+    // First download the CSV file
+    const link = document.createElement('a');
+    link.href = csvUrl;
+    link.download = 'pending_payments.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Then open WhatsApp after a short delay to allow download to start
+    setTimeout(() => {
+        window.open(whatsappUrl, '_blank');
+    }, 1000);
+
+    // Show a helpful message
+    alert('CSV file has been downloaded. Please attach it manually to your WhatsApp message.');
+}
+
+function shareClientViaWhatsApp(clientName, csvUrl) {
+    // Check if Web Share API is supported (mostly mobile)
+    if (navigator.share && navigator.canShare) {
+        fetch(csvUrl)
+            .then(response => response.blob())
+            .then(blob => {
+                const file = new File([blob], `${clientName}_pending_payments.csv`, { type: 'text/csv' });
+                if (navigator.canShare({ files: [file] })) {
+                    navigator.share({
+                        files: [file],
+                        title: `Pending Report: ${clientName}`,
+                        text: `Hello, here is the pending payment report for ${clientName}.`
+                    }).catch(error => {
+                        console.error('Error sharing:', error);
+                        fallbackShare(clientName, csvUrl);
+                    });
+                } else {
+                    fallbackShare(clientName, csvUrl);
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching CSV:', error);
+                fallbackShare(clientName, csvUrl);
+            });
+    } else {
+        // Fallback for desktop/unsupported browsers
+        fallbackShare(clientName, csvUrl);
+    }
+}
+
+function fallbackShare(clientName, csvUrl) {
+    // Create a message for WhatsApp
+    const message = encodeURIComponent(`Hello, here is the pending payment report for ${clientName}.`);
+
+    // WhatsApp URL with phone number
+    const whatsappUrl = `https://wa.me/9182351381?text=${message}`;
+
+    // First download the CSV file
+    const link = document.createElement('a');
+    link.href = csvUrl;
+    link.download = `${clientName}_pending_payments.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Then open WhatsApp after a short delay to allow download to start
+    setTimeout(() => {
+        window.open(whatsappUrl, '_blank');
+    }, 1000);
+
+    // Show a helpful message
+    alert(`CSV file for ${clientName} has been downloaded. Please attach it manually to your WhatsApp message.`);
 }
 </script>
 {% endblock %}

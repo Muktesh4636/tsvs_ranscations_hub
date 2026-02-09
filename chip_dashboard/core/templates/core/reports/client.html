@@ -16,8 +16,34 @@
         {% if start_date and end_date %}
             <a href="{% url 'reports:export_csv' %}?type=all&start_date={{ start_date }}&end_date={{ end_date }}" class="btn">Export CSV</a>
         {% endif %}
+        <button type="button" onclick="shareClientReport()" class="btn" style="background: #25d366; color: white; border: none; display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 18px;">📱</span> WhatsApp
+        </button>
     </form>
 </div>
+
+<script>
+function shareClientReport() {
+    const clientName = "{{ client.name }}";
+    const clientCode = "{{ client.code|default:'' }}";
+    const turnover = "{{ total_turnover|default:0 }}";
+    const profit = "{{ your_profit|default:0 }}";
+    const startDate = "{{ start_date|default:'All time' }}";
+    const endDate = "{{ end_date|default:'' }}";
+    
+    let dateRange = startDate;
+    if (endDate) dateRange += " to " + endDate;
+
+    const message = `*Client Report: ${clientName}* ${clientCode ? '(' + clientCode + ')' : ''}\n` +
+                    `*Period:* ${dateRange}\n\n` +
+                    `*Total Turnover:* ₹${turnover}\n` +
+                    `*Your Profit:* ₹${profit}\n\n` +
+                    `Please check the detailed report on the portal.`;
+    
+    const whatsappUrl = `https://wa.me/9182351381?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank');
+}
+</script>
 
 <div class="card-grid">
     <div class="card">

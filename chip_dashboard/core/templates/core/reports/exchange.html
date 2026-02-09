@@ -45,8 +45,32 @@
         {% if start_date and end_date %}
             <a href="{% url 'reports:export_csv' %}?type=all&start_date={{ start_date }}&end_date={{ end_date }}" class="btn">Export CSV</a>
         {% endif %}
+        <button type="button" onclick="shareExchangeReport()" class="btn" style="background: #25d366; color: white; border: none; display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 18px;">📱</span> WhatsApp
+        </button>
     </form>
 </div>
+
+<script>
+function shareExchangeReport() {
+    const exchangeName = "{{ exchange.name }}";
+    const exchangeCode = "{{ exchange.code|default:'' }}";
+    const turnover = "{{ total_turnover|default:0 }}";
+    const netProfit = "{{ net_profit|default:0 }}";
+    const reportType = "{{ report_type|capfirst }}";
+    const dateLabel = "{{ date_range_label }}";
+
+    const message = `*Exchange Report: ${exchangeName}* ${exchangeCode ? '(' + exchangeCode + ')' : ''}\n` +
+                    `*Type:* ${reportType}\n` +
+                    `*Period:* ${dateLabel}\n\n` +
+                    `*Total Turnover:* ₹${turnover}\n` +
+                    `*Net Profit:* ₹${netProfit}\n\n` +
+                    `Please check the detailed report on the portal.`;
+    
+    const whatsappUrl = `https://wa.me/9182351381?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank');
+}
+</script>
 
 <div style="background: var(--accent-soft); padding: 16px; border-radius: 8px; margin-bottom: 24px; border: 1px solid var(--accent);">
     <div style="font-size: 14px; margin-bottom: 8px;"><strong>Exchange:</strong> {{ exchange.name }}{% if exchange.code %} ({{ exchange.code }}){% endif %}</div>

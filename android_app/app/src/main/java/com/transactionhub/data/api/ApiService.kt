@@ -128,6 +128,12 @@ interface ApiService {
         @Header("Authorization") token: String
     ): Response<okhttp3.ResponseBody>
 
+    @GET("api/reports/export/")
+    suspend fun exportReportsCsv(
+        @Header("Authorization") token: String,
+        @Query("period") period: String? = null
+    ): Response<okhttp3.ResponseBody>
+
     @GET("reports/custom/")
     suspend fun getCustomReports(
         @Header("Authorization") token: String,
