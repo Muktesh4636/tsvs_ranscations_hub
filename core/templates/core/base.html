@@ -635,18 +635,31 @@
 
         <div class="nav-section-label">System</div>
         <ul class="nav">
+            {% if user.username == 'muktesh' and user.username != 'admin' %}
+            <li class="nav-item">
+                <a href="{% url 'logs_dashboard' %}" class="nav-link {% if request.resolver_match.url_name == 'logs_dashboard' %}active{% endif %}">
+                    <span class="nav-icon">📋</span>
+                    <span>Logs Dashboard</span>
+                </a>
+            </li>
+            {% endif %}
             <li class="nav-item">
                 <a href="{% url 'download_apk' %}" class="nav-link" download="chip_trading_app.apk">
                     <span class="nav-icon">📱</span>
                     <span>Download APK</span>
                 </a>
             </li>
+        </ul>
+        
+        <div class="nav-section-label">Account</div>
+        <ul class="nav">
             <li class="nav-item">
                 <a href="{% url 'logout' %}" class="nav-link">
                     <span class="nav-icon">🚪</span>
                     <span>Logout</span>
                 </a>
             </li>
+        </ul>
         </ul>
 
         <div class="sidebar-footer">

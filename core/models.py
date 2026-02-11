@@ -239,7 +239,6 @@ class ClientExchangeAccount(TimeStampedModel):
     )
     
     class Meta:
-        unique_together = [['client', 'exchange']]
         ordering = ['client__name', 'exchange__name']
     
     def __str__(self):
@@ -751,6 +750,7 @@ class Transaction(TimeStampedModel):
         ('SETTLEMENT_SHARE', 'Settlement Share Payment'),
         ('FEE', 'Fee'),
         ('ADJUSTMENT', 'Adjustment'),
+        ('UPDATE_BALANCE', 'Update Balance'),
         # Legacy types for backward compatibility
         ('FUNDING', 'Funding (Legacy)'),
         ('RECORD_PAYMENT', 'Record Payment'),
@@ -842,3 +842,36 @@ class EmailOTP(TimeStampedModel):
         """Check if OTP has expired."""
         from django.utils import timezone
         return timezone.now() > self.expires_at
+
+
+class MobileLog(TimeStampedModel):
+    """
+    Store logs from mobile app (Android APK).
+    """
+    LEVEL_CHOICES = [
+        ('DEBUG', 'Debug'),
+        ('INFO', 'Info'),
+        ('WARNING', 'Warning'),
+        ('ERROR', 'Error'),
+        ('CRITICAL', 'Critical'),
+    ]
+    
+    user = models.ForeignKey('CustomUser', on_delete=models.CASCADE, related_name='mobile_logs', null=True, blank=True)
+    level = models.CharField(max_length=10, choices=LEVEL_CHOICES, default='INFO')
+    tag = models.CharField(max_length=100, blank=True, help_text='Log tag/category (e.g., "ApiClient", "LoginActivity")')
+    message = models.TextField(help_text='Log message')
+    device_info = models.CharField(max_length=200, blank=True, help_text='Device model, OS version, etc.')
+    app_version = models.CharField(max_length=50, blank=True, help_text='App version name')
+    stack_trace = models.TextField(blank=True, help_text='Stack trace for errors')
+    extra_data = models.JSONField(default=dict, blank=True, help_text='Additional metadata')
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['level']),
+            models.Index(fields=['user', '-created_at']),
+        ]
+    
+    def __str__(self):
+        return f"[{self.level}] {self.tag}: {self.message[:50]}"

@@ -1,0 +1,211 @@
+{% extends "core/base.html" %}
+
+{% block title %}Logs Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📋 Logs Dashboard</h1>
+    <p class="text-muted">Monitor application logs and debug errors</p>
+</div>
+
+<!-- Statistics Cards -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+    <div style="background: #fff; padding: 20px; border-radius: 12px; border: 1px solid var(--border);">
+        <div style="font-size: 32px; font-weight: 700; color: var(--text);">{{ total_logs }}</div>
+        <div style="font-size: 13px; color: var(--muted); margin-top: 4px;">Total Logs</div>
+    </div>
+    <div style="background: #fff; padding: 20px; border-radius: 12px; border: 1px solid var(--border);">
+        <div style="font-size: 32px; font-weight: 700; color: var(--danger);">{{ errors_count }}</div>
+        <div style="font-size: 13px; color: var(--muted); margin-top: 4px;">Errors</div>
+    </div>
+    <div style="background: #fff; padding: 20px; border-radius: 12px; border: 1px solid var(--border);">
+        <div style="font-size: 32px; font-weight: 700; color: #f59e0b;">{{ warnings_count }}</div>
+        <div style="font-size: 13px; color: var(--muted); margin-top: 4px;">Warnings</div>
+    </div>
+    <div style="background: #fff; padding: 20px; border-radius: 12px; border: 1px solid var(--border);">
+        <div style="font-size: 32px; font-weight: 700; color: var(--accent);">{{ log_sources|length }}</div>
+        <div style="font-size: 13px; color: var(--muted); margin-top: 4px;">Log Sources</div>
+    </div>
+</div>
+
+<!-- Filters -->
+<div style="background: #fff; padding: 20px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 24px;">
+    <form method="get" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; align-items: end;">
+        <div>
+            <label class="field-label">Log Source</label>
+            <select name="type" class="field-input" onchange="this.form.submit()">
+                <option value="all" {% if log_type == 'all' %}selected{% endif %}>All Sources</option>
+                <option value="django" {% if log_type == 'django' %}selected{% endif %}>Django</option>
+                <option value="gunicorn" {% if log_type == 'gunicorn' %}selected{% endif %}>Gunicorn</option>
+                <option value="nginx" {% if log_type == 'nginx' %}selected{% endif %}>Nginx</option>
+                <option value="mobile" {% if log_type == 'mobile' %}selected{% endif %}>Mobile App</option>
+            </select>
+        </div>
+        <div>
+            <label class="field-label">Log Level</label>
+            <select name="level" class="field-input" onchange="this.form.submit()">
+                <option value="all" {% if log_level == 'all' %}selected{% endif %}>All Levels</option>
+                <option value="error" {% if log_level == 'error' %}selected{% endif %}>Errors Only</option>
+                <option value="warning" {% if log_level == 'warning' %}selected{% endif %}>Warnings Only</option>
+                <option value="info" {% if log_level == 'info' %}selected{% endif %}>Info Only</option>
+            </select>
+        </div>
+        <div>
+            <label class="field-label">Search</label>
+            <input type="text" name="search" value="{{ search_query }}" placeholder="Search logs..." class="field-input" style="margin-bottom: 0;">
+        </div>
+        <div>
+            <label class="field-label">Lines</label>
+            <select name="lines" class="field-input" onchange="this.form.submit()">
+                <option value="100" {% if lines_limit == 100 %}selected{% endif %}>100</option>
+                <option value="500" {% if lines_limit == 500 %}selected{% endif %}>500</option>
+                <option value="1000" {% if lines_limit == 1000 %}selected{% endif %}>1000</option>
+                <option value="2000" {% if lines_limit == 2000 %}selected{% endif %}>2000</option>
+            </select>
+        </div>
+        <div>
+            <button type="submit" class="btn btn-primary" style="width: 100%;">Apply Filters</button>
+        </div>
+        <div>
+            <a href="{% url 'logs_dashboard' %}" class="btn" style="width: 100%; text-align: center; text-decoration: none;">Reset</a>
+        </div>
+    </form>
+</div>
+
+<!-- Logs Display -->
+<div style="background: #fff; border-radius: 12px; border: 1px solid var(--border); overflow: hidden;">
+    <div style="padding: 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="font-size: 18px; margin: 0;">Log Entries</h2>
+        <div style="display: flex; gap: 8px;">
+            <button onclick="refreshLogs()" class="btn btn-sm">🔄 Refresh</button>
+            <form method="post" style="display: inline;" onsubmit="return confirmClearLogs();">
+                {% csrf_token %}
+                <button type="submit" name="clear_logs" class="btn btn-sm" style="background: var(--danger); color: white; border-color: var(--danger);">🗑️ Clear Logs</button>
+            </form>
+        </div>
+    </div>
+    
+    <div id="logs-container" style="max-height: 800px; overflow-y: auto; padding: 12px; background: #f3f4f6;">
+        {% if all_logs %}
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                {% for log in all_logs %}
+                <div class="log-card" 
+                     data-level="{{ log.level|lower }}" 
+                     data-source="{{ log.source|lower }}"
+                     style="background: #fff; border-radius: 8px; border: 1px solid var(--border); overflow: hidden; display: flex; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                    
+                    <!-- Level Indicator Bar -->
+                    <div style="width: 4px; flex-shrink: 0; background: {% if log.level == 'ERROR' %}#dc2626{% elif log.level == 'WARNING' %}#f59e0b{% else %}#3b82f6{% endif %};"></div>
+                    
+                    <div style="flex-grow: 1; padding: 12px;">
+                        <!-- Header: Source, Level, Timestamp -->
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 6px; border-radius: 4px; background: {% if log.source == 'Django' %}#e0e7ff{% elif log.source == 'Gunicorn' %}#dbeafe{% elif log.source == 'Mobile App' %}#fce7f3{% else %}#f3f4f6{% endif %}; color: {% if log.source == 'Django' %}#3730a3{% elif log.source == 'Gunicorn' %}#1e40af{% elif log.source == 'Mobile App' %}#9f1239{% else %}#374151{% endif %};">
+                                    {{ log.source }}
+                                </span>
+                                <span style="font-size: 11px; font-weight: 700; color: {% if log.level == 'ERROR' %}#dc2626{% elif log.level == 'WARNING' %}#d97706{% else %}#3730a3{% endif %};">
+                                    {{ log.level }}
+                                </span>
+                                {% if log.user %}
+                                <span style="font-size: 11px; background: #f3f4f6; color: #4b5563; padding: 2px 6px; border-radius: 4px; border: 1px solid #e5e7eb;">
+                                    👤 {{ log.user }}
+                                </span>
+                                {% endif %}
+                                {% if log.device_info %}
+                                <span style="font-size: 11px; background: #f3f4f6; color: #4b5563; padding: 2px 6px; border-radius: 4px; border: 1px solid #e5e7eb;">
+                                    📱 {{ log.device_info }}
+                                </span>
+                                {% endif %}
+                            </div>
+                            <div style="font-size: 11px; color: #9ca3af; font-family: monospace;">
+                                {{ log.timestamp|default:"—" }}
+                            </div>
+                        </div>
+
+                        <!-- Main Message (Simplified) -->
+                        <div style="font-size: 14px; font-weight: 600; color: #111827; margin-bottom: 4px; line-height: 1.4;">
+                            {{ log.simple_message }}
+                        </div>
+
+                        <!-- Technical Details (Collapsible) -->
+                        <div style="margin-top: 8px;">
+                            <button onclick="toggleLogDetails(this)" style="background: none; border: none; padding: 0; color: #6b7280; font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+                                <span>▶ Technical Details</span>
+                            </button>
+                            <div class="log-details" style="display: none; margin-top: 8px; border-top: 1px dashed #e5e7eb; padding-top: 8px;">
+                                <div style="font-size: 11px; color: #6b7280; font-family: monospace; word-break: break-all; background: #f9fafb; padding: 8px; border-radius: 4px;">
+                                    <strong>Raw Log:</strong> {{ log.message }}
+                                </div>
+                                {% if log.stack_trace %}
+                                <div style="margin-top: 8px; padding: 8px; background: #fff1f2; border-radius: 4px; font-size: 11px; font-family: monospace; white-space: pre-wrap; color: #991b1b; max-height: 300px; overflow-y: auto; border: 1px solid #fecaca;">
+                                    <strong>Stack Trace:</strong><br>{{ log.stack_trace }}
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div style="padding: 40px; text-align: center; color: var(--muted);">
+                <p>No logs found matching your filters.</p>
+                <a href="{% url 'logs_dashboard' %}" class="btn btn-sm" style="margin-top: 12px;">Clear Filters</a>
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function refreshLogs() {
+    window.location.reload();
+}
+
+function confirmClearLogs() {
+    return confirm('Are you sure you want to clear all logs? This action cannot be undone.\n\nThis will clear:\n- Django Security Log\n- Nginx Error Logs (if accessible)\n\nNote: Gunicorn logs are managed by systemd and cannot be cleared from here.');
+}
+
+function toggleLogDetails(btn) {
+    const details = btn.nextElementSibling;
+    const icon = btn.querySelector('span:first-child');
+    
+    if (details.style.display === 'none') {
+        details.style.display = 'block';
+        icon.textContent = '▼ Technical Details';
+    } else {
+        details.style.display = 'none';
+        icon.textContent = '▶ Technical Details';
+    }
+}
+</script>
+
+<style>
+.log-card:hover {
+    border-color: #d1d5db !important;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+}
+
+#logs-container {
+    scrollbar-width: thin;
+    scrollbar-color: #d1d5db transparent;
+}
+
+#logs-container::-webkit-scrollbar {
+    width: 8px;
+}
+
+#logs-container::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#logs-container::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 4px;
+}
+
+#logs-container::-webkit-scrollbar-thumb:hover {
+    background: #9ca3af;
+}
+</style>
+{% endblock %}

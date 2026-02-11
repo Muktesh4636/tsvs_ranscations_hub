@@ -14,7 +14,7 @@
         <input type="date" id="end_date" name="end_date" value="{{ end_date|default:'' }}" class="field-input" style="width: auto; max-width: 200px;">
         <button type="submit" class="btn btn-primary">Search</button>
         {% if start_date and end_date %}
-            <a href="{% url 'reports:export_csv' %}?type=all&start_date={{ start_date }}&end_date={{ end_date }}" class="btn">Export CSV</a>
+            <a href="{% url 'api-export-reports-csv' %}?type=all&start_date={{ start_date }}&end_date={{ end_date }}" class="btn">Export CSV</a>
         {% endif %}
         <button type="button" onclick="shareClientReport()" class="btn" style="background: #25d366; color: white; border: none; display: flex; align-items: center; gap: 8px;">
             <span style="font-size: 18px;">📱</span> WhatsApp

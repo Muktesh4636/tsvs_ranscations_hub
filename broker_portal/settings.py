@@ -21,7 +21,7 @@ DEBUG = config('DEBUG', default=True, cast=bool)
 # Defaults include localhost, the server IP and the domain `chip.pravoo.in` to allow external access.
 ALLOWED_HOSTS = config(
     'ALLOWED_HOSTS',
-    default='localhost,127.0.0.1,72.61.148.117,chip.pravoo.in,www.chip.pravoo.in,10.13.171.64,*',
+    default='localhost,127.0.0.1,72.61.148.117,chip.pravoo.in,www.chip.pravoo.in,svs.transactions.pravoo.in,svs.transactions,svs.transcations,svs.transcations.pravoo.in,10.13.171.64,*',
     cast=Csv()
 )
 
@@ -92,25 +92,6 @@ DATABASES = {
     }
 }
 
-# Database
-# PostgreSQL Configuration (production-ready, efficient, scalable)
-# PostgreSQL only - SQLite fallback removed after successful data migration
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('DB_NAME', default='broker_portal'),
-        'USER': config('DB_USER', default='postgres'),
-        'PASSWORD': config('DB_PASSWORD', default=''),
-        'HOST': config('DB_HOST', default='localhost'),
-        'PORT': config('DB_PORT', default='5432'),
-        'OPTIONS': {
-            'connect_timeout': 10,
-        },
-        # Connection pooling for better performance
-        'CONN_MAX_AGE': 600 if not DEBUG else 0,  # Reuse connections in production
-    }
-}
-
 
 # Password validation - Enhanced security
 AUTH_PASSWORD_VALIDATORS = [
@@ -143,7 +124,12 @@ USE_TZ = True
 
 
 # Static files (CSS, JavaScript, Images)
-STATIC_URL = 'static/'
+STATIC_URL = config('STATIC_URL', default='/static/')
+STATIC_ROOT = config('STATIC_ROOT', default=BASE_DIR / 'staticfiles')
+
+# Media files (user uploads)
+MEDIA_URL = config('MEDIA_URL', default='/media/')
+MEDIA_ROOT = config('MEDIA_ROOT', default=BASE_DIR / 'media')
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -258,9 +244,19 @@ LOGGING = {
         },
     },
     'loggers': {
+        'django': {
+            'handlers': ['file', 'console'],
+            'level': 'WARNING',
+            'propagate': True,
+        },
         'django.security': {
             'handlers': ['file', 'console'],
             'level': 'WARNING',
+            'propagate': True,
+        },
+        'core': {
+            'handlers': ['file', 'console'],
+            'level': 'INFO',
             'propagate': True,
         },
         'core.security': {

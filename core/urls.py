@@ -44,6 +44,7 @@ urlpatterns = [
     path('api/accounts/<int:account_id>/settings/', api_views.api_update_account_settings, name='api-account-settings'),
     path('api/accounts/<int:account_id>/report-config/', api_views.api_account_report_config, name='api-account-report-config'),
     path('api/clients/<int:pk>/delete/', api_views.api_delete_client, name='api-client-delete-mobile'),
+    path('api/mobile-logs/', api_views.api_submit_mobile_log, name='api-submit-mobile-log'),
     path('api/', include(router.urls)),  # Changed from '' to 'api/' to avoid conflict
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
     path('api/token-auth/', include('rest_framework.urls')), # Simplified for token login later
@@ -101,5 +102,8 @@ urlpatterns = [
 
     # APK Downloads
     path('download/apk/', views.download_apk, name='download_apk'),
+    
+    # Logs Dashboard
+    path('logs/', views.logs_dashboard, name='logs_dashboard'),
 ]
 

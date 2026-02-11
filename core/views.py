@@ -2,6 +2,9 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 import json
 import time
+import subprocess
+import os
+from pathlib import Path
 
 from django.contrib.auth import logout, login, authenticate, get_user_model
 from django.contrib.auth.decorators import login_required
@@ -11,7 +14,7 @@ from django.db.models import Q, Sum, Count, F
 from django.db.models.functions import Abs
 from django.core.exceptions import FieldError
 from django.db import transaction as db_transaction
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
@@ -34,6 +37,7 @@ from .models import (
     ClientExchangeReportConfig,
     Settlement,
     EmailOTP,
+    MobileLog,
     )
 from .forms import SignupForm, OTPVerificationForm
 
@@ -2085,13 +2089,11 @@ def export_pending_csv(request):
         # Sort by client name to group them for Period/U_CODE logic
         clients_owe_list.sort(key=lambda x: (x["client"].name.lower(), -abs(x["client_pnl"])))
         
-        last_client_id = None
         for item in clients_owe_list:
-            is_new_client = item["client"].pk != last_client_id
             row_data = [
-                today_str if is_new_client else '',
+                today_str,  # Always show Period
                 f'{item["exchange"].name}{f" ({item["exchange"].code})" if item["exchange"].code else ""}',
-                (item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-')) if is_new_client else '',
+                item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-'),  # Always show U_CODE
                 int(item["account"].funding),
                 int(item["account"].exchange_balance),
                 'N.A' if item.get("show_na", False) else int(item["client_pnl"]),
@@ -2099,20 +2101,17 @@ def export_pending_csv(request):
                 item.get("share_percentage", item["account"].my_percentage)
             ]
             writer.writerow(row_data)
-            last_client_id = item["client"].pk
             
     # Write You Owe Clients section (if requested)
     if section in ["all", "you-owe"]:
         # Sort by client name to group them for Period/U_CODE logic
         you_owe_list.sort(key=lambda x: (x["client"].name.lower(), -abs(x["client_pnl"])))
         
-        last_client_id = None
         for item in you_owe_list:
-            is_new_client = item["client"].pk != last_client_id
             row_data = [
-                today_str if is_new_client else '',
+                today_str,  # Always show Period
                 f'{item["exchange"].name}{f" ({item["exchange"].code})" if item["exchange"].code else ""}',
-                (item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-')) if is_new_client else '',
+                item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-'),  # Always show U_CODE
                 int(item["account"].funding),
                 int(item["account"].exchange_balance),
                 'N.A' if item.get("show_na", False) else int(item["client_pnl"]),
@@ -2120,7 +2119,6 @@ def export_pending_csv(request):
                 item.get("share_percentage", item["account"].my_percentage)
             ]
             writer.writerow(row_data)
-            last_client_id = item["client"].pk
     
     return response
 
@@ -2284,11 +2282,11 @@ def export_client_pending_csv(request, client_id):
         writer.writerow(['Period', 'Master', 'U_CODE', 'OPENING POINTS', 'AVL.POINTS(CLOSING POINTS)', 'PROFIT(+)/LOSS(-)', 'MY SHARE', 'MY%', 'Status'])
 
         today_str = timezone.now().strftime('%Y-%m-%d')
-        for i, item in enumerate(clients_owe_list):
+        for item in clients_owe_list:
             row_data = [
-                today_str if i == 0 else '',
+                today_str,  # Always show Period
                 f'{item["exchange"].name}{f" ({item["exchange"].code})" if item["exchange"].code else ""}',
-                (item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-')) if i == 0 else '',
+                item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-'),  # Always show U_CODE
                 f'{item["account"].funding:.2f}',
                 f'{item["account"].exchange_balance:.2f}',
                 'N.A' if item.get("show_na", False) else f'{item["client_pnl"]:.2f}',
@@ -2306,11 +2304,11 @@ def export_client_pending_csv(request, client_id):
         writer.writerow(['Period', 'Master', 'U_CODE', 'OPENING POINTS', 'AVL.POINTS(CLOSING POINTS)', 'PROFIT(+)/LOSS(-)', 'MY SHARE', 'MY%', 'Status'])
 
         today_str = timezone.now().strftime('%Y-%m-%d')
-        for i, item in enumerate(you_owe_list):
+        for item in you_owe_list:
             row_data = [
-                today_str if i == 0 else '',
+                today_str,  # Always show Period
                 f'{item["exchange"].name}{f" ({item["exchange"].code})" if item["exchange"].code else ""}',
-                (item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-')) if i == 0 else '',
+                item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-'),  # Always show U_CODE
                 f'{item["account"].funding:.2f}',
                 f'{item["account"].exchange_balance:.2f}',
                 'N.A' if item.get("show_na", False) else f'{item["client_pnl"]:.2f}',
@@ -3494,7 +3492,7 @@ def transaction_detail(request, pk):
     balance_after = transaction.exchange_balance_after if hasattr(transaction, 'exchange_balance_after') else balance_before
     
     # Calculate differences
-    balance_change = balance_after - balance_before
+    balance_change = (balance_after or 0) - (balance_before or 0)
     
     # Determine client type for URL routing
     client_type = "my"  # All clients are now "my clients"
@@ -3516,15 +3514,6 @@ def transaction_detail(request, pk):
         "balance_before": balance_before,
         "balance_after": balance_after,
         "balance_change": balance_change,
-        "client_net_before": client_net_before,
-        "client_net_after": client_net_after,
-        "client_net_change": client_net_change,
-        "funding_before": funding_before,
-        "funding_after": funding_after,
-        "profit_before": profit_before,
-        "profit_after": profit_after,
-        "loss_before": loss_before,
-        "loss_after": loss_after,
     }
     return render(request, "core/transactions/detail.html", context)
 
@@ -3960,10 +3949,8 @@ def report_weekly(request):
     """Weekly report for a specific week with graphs and analysis."""
     week_start_str = request.GET.get("week_start", None)
     if week_start_str:
-
-        pass
+        week_start = date.fromisoformat(week_start_str)
     else:
-
         # Default to current week (Monday)
         today = date.today()
         days_since_monday = today.weekday()
@@ -4072,7 +4059,7 @@ def report_weekly(request):
     daily_turnover = []
     
     for i in range(7):
-
+        current_date = week_start + timedelta(days=i)
         daily_labels.append(current_date.strftime("%a %d"))
         
         day_qs = qs.filter(date=current_date)
@@ -4194,12 +4181,9 @@ def report_monthly(request):
     
     month_start = date(year, month, 1)
     if month == 12:
-
-        pass
+        month_end = date(year + 1, 1, 1) - timedelta(days=1)
     else:
-
         month_end = date(year, month + 1, 1) - timedelta(days=1)
-
     
     qs = Transaction.objects.filter(client_exchange__client__user=request.user, date__gte=month_start, date__lte=month_end)
     
@@ -4304,9 +4288,10 @@ def report_monthly(request):
     current_date = month_start
     week_num = 1
     while current_date <= month_end:
+        week_end_date = min(current_date + timedelta(days=6), month_end)
 
         weekly_labels.append(f"Week {week_num} ({current_date.strftime('%d')}-{week_end_date.strftime('%d %b')})")
-        
+
         week_qs = qs.filter(date__gte=current_date, date__lte=week_end_date)
         # Profit/Loss from RECORD_PAYMENT transactions
         week_payment_qs = week_qs.filter(type='RECORD_PAYMENT')
@@ -4464,10 +4449,9 @@ def report_custom(request):
     end_date_str = request.GET.get("end_date")
     
     if start_date_str and end_date_str:
-
+        start_date = date.fromisoformat(start_date_str)
         end_date = date.fromisoformat(end_date_str)
     else:
-
         # Default to last 30 days
         end_date = date.today()
         start_date = end_date - timedelta(days=30)
@@ -4718,18 +4702,6 @@ def link_client_to_exchange(request):
             if my_percentage_float < 0 or my_percentage_float > 100:
                 from django.contrib import messages
                 messages.error(request, "My Total % must be between 0 and 100.")
-                return render(request, "core/exchanges/link_to_client.html", {
-                    "clients": Client.objects.filter(user=request.user).order_by("name"),
-                    "exchanges": Exchange.objects.all().order_by("name"),
-                })
-            
-            # Check if link already exists
-            if ClientExchangeAccount.objects.filter(client=client, exchange=exchange).exists():
-                from django.contrib import messages
-                exchange_display = exchange.name
-                if exchange.version_name:
-                    exchange_display = f"{exchange.name} - {exchange.version_name}"
-                messages.error(request, f"Client '{client.name}' is already linked to '{exchange_display}'.")
                 return render(request, "core/exchanges/link_to_client.html", {
                     "clients": Client.objects.filter(user=request.user).order_by("name"),
                     "exchanges": Exchange.objects.all().order_by("name"),
@@ -6065,3 +6037,426 @@ def download_apk(request):
         response = HttpResponse(apk_file.read(), content_type='application/vnd.android.package-archive')
         response['Content-Disposition'] = 'attachment; filename="chip_trading_app.apk"'
         return response
+
+
+@login_required
+@login_required
+def logs_dashboard(request):
+    """Logs dashboard to view application logs and debug errors."""
+    # Restrict access to only user 'muktesh' - admin and all other users are blocked
+    if request.user.username != 'muktesh':
+        return HttpResponseForbidden("You don't have permission to access this page.")
+    
+    from django.contrib import messages
+    import re
+    
+    def simplify_log_message(message, source):
+        """Simplifies raw log messages into common English."""
+        msg = message.strip()
+        
+        if source == 'Django':
+            # Security/Auth logs
+            if 'Invalid password for user' in msg:
+                user_match = re.search(r'user (.*)', msg)
+                username = user_match.group(1) if user_match else "someone"
+                return f"Failed login attempt for user '{username}' (Wrong password)"
+            if 'Login success for user' in msg:
+                user_match = re.search(r'user (.*)', msg)
+                username = user_match.group(1) if user_match else "someone"
+                return f"User '{username}' logged in successfully"
+            if 'Logout success for user' in msg:
+                user_match = re.search(r'user (.*)', msg)
+                username = user_match.group(1) if user_match else "someone"
+                return f"User '{username}' logged out"
+        
+        elif source == 'Gunicorn':
+            # Server/Request logs
+            if 'GET /' in msg:
+                path_match = re.search(r'GET ([^ ]*)', msg)
+                path = path_match.group(1) if path_match else "/"
+                status_match = re.search(r'HTTP/1.1" (\d+)', msg)
+                status = status_match.group(1) if status_match else ""
+                if status == '200':
+                    return f"Someone viewed page: {path}"
+                elif status == '404':
+                    return f"Page not found: {path}"
+                elif status == '500':
+                    return f"System error on page: {path}"
+            if 'POST /' in msg:
+                path_match = re.search(r'POST ([^ ]*)', msg)
+                path = path_match.group(1) if path_match else "/"
+                return f"Form submitted on page: {path}"
+            if 'Worker exiting' in msg:
+                return "Server worker is restarting"
+            if 'Booting worker' in msg:
+                return "Server worker started"
+        
+        elif source == 'Nginx':
+            # Web server errors
+            if 'directory index of' in msg and 'is forbidden' in msg:
+                return "Blocked attempt to list folder files"
+            if 'client intended to send too large body' in msg:
+                return "File upload too large"
+            if 'upstream timed out' in msg:
+                return "System took too long to respond (Timeout)"
+            if 'no such file or directory' in msg:
+                file_match = re.search(r'open\(\) "(.*)" failed', msg)
+                filename = file_match.group(1).split('/')[-1] if file_match else "file"
+                return f"Missing file: {filename}"
+        
+        elif source == 'Mobile App':
+            # Mobile app specific
+            if 'Sync started' in msg:
+                return "Mobile app started syncing data"
+            if 'Sync completed' in msg:
+                return "Mobile app finished syncing data"
+            if 'Network error' in msg:
+                return "Mobile app had a connection problem"
+            if 'User clicked' in msg:
+                btn_match = re.search(r'clicked (.*)', msg)
+                btn = btn_match.group(1) if btn_match else "button"
+                return f"User tapped on '{btn}'"
+
+        # If no simplification rule matches, return original or cleaned up message
+        return msg[:200] + '...' if len(msg) > 200 else msg
+
+    # Handle clear logs POST request
+    if request.method == 'POST' and 'clear_logs' in request.POST:
+        cleared_sources = []
+        
+        # Clear Django security log
+        security_log_path = Path(settings.BASE_DIR) / 'security.log'
+        if security_log_path.exists():
+            try:
+                with open(security_log_path, 'w') as f:
+                    f.write('')  # Clear the file
+                cleared_sources.append('Django Security Log')
+            except Exception as e:
+                messages.error(request, f'Error clearing Django log: {str(e)}')
+        
+        # Clear Mobile App logs from database
+        try:
+            deleted_count = MobileLog.objects.all().delete()[0]
+            if deleted_count > 0:
+                cleared_sources.append(f'Mobile App Logs ({deleted_count} entries)')
+        except Exception as e:
+            messages.error(request, f'Error clearing mobile logs: {str(e)}')
+        
+        # Note: Gunicorn logs are in journalctl and require system-level access
+        # We can't easily clear them from Django, but we can note it
+        
+        # Clear Nginx error logs if accessible
+        nginx_error_log_paths = [
+            '/var/log/nginx/error.log',
+            '/etc/nginx/logs/error.log',
+        ]
+        for nginx_path in nginx_error_log_paths:
+            if os.path.exists(nginx_path) and os.access(nginx_path, os.W_OK):
+                try:
+                    with open(nginx_path, 'w') as f:
+                        f.write('')  # Clear the file
+                    cleared_sources.append('Nginx Error Log')
+                    break
+                except Exception as e:
+                    pass  # Silently fail if we can't write
+        
+        if cleared_sources:
+            success_msg = f'Successfully cleared: {", ".join(cleared_sources)}'
+            # Note about Gunicorn logs
+            if 'Gunicorn' not in ', '.join(cleared_sources):
+                success_msg += '\n\nNote: Gunicorn logs are managed by systemd (journalctl) and cannot be cleared from here. To clear Gunicorn logs, use: sudo journalctl --vacuum-time=1d'
+            messages.success(request, success_msg)
+        else:
+            messages.warning(request, 'No logs were cleared. Log files may not be accessible or writable.')
+        
+        # Redirect to logs dashboard to show updated (empty) logs
+        return redirect('logs_dashboard')
+    
+    log_sources = []
+    errors_count = 0
+    warnings_count = 0
+    
+    # Get filter parameters
+    log_type = request.GET.get('type', 'all')  # django, gunicorn, nginx, mobile, all
+    log_level = request.GET.get('level', 'all')  # error, warning, info, all
+    search_query = request.GET.get('search', '').strip()
+    lines_limit = int(request.GET.get('lines', 1000))  # Increased default to 1000
+    
+    # 1. Django Security & App Logs
+    django_logs = []
+    security_log_path = Path(settings.BASE_DIR) / 'security.log'
+    if security_log_path.exists():
+        try:
+            with open(security_log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                # Get last N lines
+                recent_lines = lines[-lines_limit:] if len(lines) > lines_limit else lines
+                
+                for line in recent_lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    log_entry = {
+                        'source': 'Django',
+                        'timestamp': '',
+                        'level': 'INFO',
+                        'message': line,
+                        'simple_message': simplify_log_message(line, 'Django'),
+                        'raw': line
+                    }
+                    
+                    # Try to parse log format: LEVELNAME YYYY-MM-DD HH:MM:SS,mmm module message
+                    parts = line.split(' ', 3)
+                    if len(parts) >= 4:
+                        try:
+                            log_entry['level'] = parts[0]
+                            log_entry['timestamp'] = f"{parts[1]} {parts[2]}"
+                            log_entry['message'] = parts[3] if len(parts) > 3 else line
+                            log_entry['simple_message'] = simplify_log_message(log_entry['message'], 'Django')
+                        except:
+                            pass
+                    
+                    # Count errors and warnings
+                    if 'ERROR' in line.upper() or '500 ERROR' in line.upper() or 'CRITICAL' in line.upper():
+                        log_entry['level'] = 'ERROR'
+                        errors_count += 1
+                    elif 'WARNING' in line.upper() or 'WARN' in line.upper():
+                        log_entry['level'] = 'WARNING'
+                        warnings_count += 1
+                    
+                    # Apply filters
+                    if log_type not in ['all', 'django']:
+                        continue
+                    if log_level != 'all' and log_level.upper() not in log_entry['level']:
+                        continue
+                    if search_query and search_query.lower() not in line.lower():
+                        continue
+                    
+                    django_logs.append(log_entry)
+        except Exception as e:
+            django_logs.append({
+                'source': 'Django',
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'level': 'ERROR',
+                'message': f'Error reading Django log: {str(e)}',
+                'simple_message': f'Error reading Django log: {str(e)}',
+                'raw': f'Error reading Django log: {str(e)}'
+            })
+    
+    log_sources.append({
+        'name': 'Django App & Security Logs',
+        'type': 'django',
+        'logs': django_logs,
+        'count': len(django_logs)
+    })
+    
+    # 2. Gunicorn Logs (via journalctl - checks multiple services)
+    gunicorn_logs = []
+    if os.path.exists('/usr/bin/journalctl') or os.path.exists('/bin/journalctl'):
+        # List of possible Gunicorn services to check
+        services = ['chip-broker.service', 'broker_portal.service']
+        
+        for service in services:
+            try:
+                # Try to get Gunicorn logs from systemd journal
+                result = subprocess.run(
+                    ['journalctl', '-u', service, '-n', str(lines_limit), '--no-pager'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    errors='ignore'
+                )
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    lines = result.stdout.split('\n')
+                    for line in lines:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        log_entry = {
+                            'source': 'Gunicorn',
+                            'timestamp': '',
+                            'level': 'INFO',
+                            'message': line,
+                            'simple_message': simplify_log_message(line, 'Gunicorn'),
+                            'raw': line
+                        }
+                        
+                        # Parse journalctl format: MMM DD HH:MM:SS hostname service[pid]: message
+                        parts = line.split(' ', 5)
+                        if len(parts) >= 6:
+                            try:
+                                log_entry['timestamp'] = ' '.join(parts[:3])
+                                log_entry['message'] = parts[5] if len(parts) > 5 else line
+                                log_entry['simple_message'] = simplify_log_message(log_entry['message'], 'Gunicorn')
+                            except:
+                                pass
+                        
+                        # Detect error/warning levels
+                        if 'ERROR' in line.upper() or '500 ERROR' in line.upper() or 'Traceback' in line:
+                            log_entry['level'] = 'ERROR'
+                            errors_count += 1
+                        elif 'WARNING' in line.upper() or 'WARN' in line.upper():
+                            log_entry['level'] = 'WARNING'
+                            warnings_count += 1
+                        
+                        # Apply filters
+                        if log_type not in ['all', 'gunicorn']:
+                            continue
+                        if log_level != 'all' and log_level.upper() not in log_entry['level']:
+                            continue
+                        if search_query and search_query.lower() not in line.lower():
+                            continue
+                        
+                        gunicorn_logs.append(log_entry)
+            except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+                # journalctl not available or service not found
+                pass
+            except Exception as e:
+                gunicorn_logs.append({
+                    'source': 'Gunicorn',
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'level': 'ERROR',
+                    'message': f'Error reading Gunicorn logs ({service}): {str(e)}',
+                    'simple_message': f'Error reading Gunicorn logs ({service}): {str(e)}',
+                    'raw': f'Error reading Gunicorn logs ({service}): {str(e)}'
+                })
+    
+    log_sources.append({
+        'name': 'Gunicorn Service Logs',
+        'type': 'gunicorn',
+        'logs': gunicorn_logs,
+        'count': len(gunicorn_logs)
+    })
+    
+    # 3. Nginx Error Logs (if accessible)
+    nginx_logs = []
+    nginx_error_log_paths = [
+        '/var/log/nginx/error.log',
+        '/etc/nginx/logs/error.log',
+    ]
+    
+    for nginx_path in nginx_error_log_paths:
+        if os.path.exists(nginx_path) and os.access(nginx_path, os.R_OK):
+            try:
+                with open(nginx_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    lines = f.readlines()
+                    recent_lines = lines[-lines_limit:] if len(lines) > lines_limit else lines
+                    
+                    for line in recent_lines:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        log_entry = {
+                            'source': 'Nginx',
+                            'timestamp': '',
+                            'level': 'INFO',
+                            'message': line,
+                            'simple_message': simplify_log_message(line, 'Nginx'),
+                            'raw': line
+                        }
+                        
+                        # Parse nginx log format
+                        if 'error' in line.lower():
+                            log_entry['level'] = 'ERROR'
+                            errors_count += 1
+                        elif 'warn' in line.lower():
+                            log_entry['level'] = 'WARNING'
+                            warnings_count += 1
+                        
+                        # Apply filters
+                        if log_type not in ['all', 'nginx']:
+                            continue
+                        if log_level != 'all' and log_level.upper() not in log_entry['level']:
+                            continue
+                        if search_query and search_query.lower() not in line.lower():
+                            continue
+                        
+                        nginx_logs.append(log_entry)
+                    
+                    break  # Only read first accessible log
+            except Exception as e:
+                pass
+    
+    log_sources.append({
+        'name': 'Nginx Error Logs',
+        'type': 'nginx',
+        'logs': nginx_logs,
+        'count': len(nginx_logs)
+    })
+    
+    # 4. Mobile App Logs (from database)
+    mobile_logs = []
+    try:
+        # Get mobile logs from database (limit to recent entries)
+        mobile_logs_qs = MobileLog.objects.all().order_by('-created_at')[:lines_limit]
+        
+        for log in mobile_logs_qs:
+            log_entry = {
+                'source': 'Mobile App',
+                'timestamp': log.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                'level': log.level,
+                'message': f"[{log.tag}] {log.message}" if log.tag else log.message,
+                'simple_message': simplify_log_message(log.message, 'Mobile App'),
+                'raw': f"[{log.tag}] {log.message}" if log.tag else log.message,
+                'user': log.user.username if log.user else 'Unknown',
+                'device_info': log.device_info,
+                'app_version': log.app_version,
+                'stack_trace': log.stack_trace,
+            }
+            
+            # Count errors and warnings
+            if log.level in ['ERROR', 'CRITICAL']:
+                errors_count += 1
+            elif log.level == 'WARNING':
+                warnings_count += 1
+            
+            # Apply filters
+            if log_type not in ['all', 'mobile']:
+                continue
+            if log_level != 'all' and log_level.upper() not in log_entry['level']:
+                continue
+            if search_query and search_query.lower() not in log_entry['message'].lower():
+                continue
+            
+            mobile_logs.append(log_entry)
+    except Exception as e:
+        mobile_logs.append({
+            'source': 'Mobile App',
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'level': 'ERROR',
+            'message': f'Error reading mobile logs: {str(e)}',
+            'raw': f'Error reading mobile logs: {str(e)}'
+        })
+    
+    log_sources.append({
+        'name': 'Mobile App Logs',
+        'type': 'mobile',
+        'logs': mobile_logs,
+        'count': len(mobile_logs)
+    })
+    
+    # Combine all logs and sort by timestamp (newest first)
+    all_logs = []
+    for source in log_sources:
+        all_logs.extend(source['logs'])
+    
+    # Sort by timestamp if available, otherwise keep original order
+    all_logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    
+    context = {
+        'log_sources': log_sources,
+        'all_logs': all_logs,
+        'errors_count': errors_count,
+        'warnings_count': warnings_count,
+        'total_logs': len(all_logs),
+        'log_type': log_type,
+        'log_level': log_level,
+        'search_query': search_query,
+        'lines_limit': lines_limit,
+    }
+    
+    return render(request, 'core/logs/dashboard.html', context)

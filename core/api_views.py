@@ -10,7 +10,7 @@ from django.http import HttpResponse
 from decimal import Decimal
 from datetime import date, timedelta
 import csv
-from .models import Client, Exchange, ClientExchangeAccount, Transaction, ClientExchangeReportConfig
+from .models import Client, Exchange, ClientExchangeAccount, Transaction, ClientExchangeReportConfig, MobileLog
 from .serializers import (
     ClientSerializer, ExchangeSerializer,
     ClientExchangeAccountSerializer, TransactionSerializer
@@ -29,6 +29,7 @@ def api_root(request):
         'login': reverse('api-login', request=request),
         'mobile-dashboard': reverse('api-mobile-dashboard', request=request),
         'pending-payments': reverse('api-pending-payments', request=request),
+        'mobile-logs': reverse('api-submit-mobile-log', request=request),
         'message': 'API endpoints require authentication. Use /api/login/ to obtain a token.',
     })
 
@@ -1175,3 +1176,71 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
         return Transaction.objects.filter(
             client_exchange__client__user=self.request.user
         ).order_by('-created_at', '-id')
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def api_submit_mobile_log(request):
+    """
+    API endpoint for mobile app to submit logs.
+    Accepts single log entry or batch of logs.
+    """
+    try:
+        # Handle both single log and batch of logs
+        logs_data = request.data
+        
+        # If it's a single log object, wrap it in a list
+        if not isinstance(logs_data, list):
+            logs_data = [logs_data]
+        
+        created_logs = []
+        errors = []
+        
+        for log_data in logs_data:
+            try:
+                # Extract log fields
+                level = log_data.get('level', 'INFO').upper()
+                if level not in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
+                    level = 'INFO'
+                
+                tag = log_data.get('tag', '').strip()[:100]
+                message = log_data.get('message', '').strip()
+                
+                if not message:
+                    errors.append('Log message is required')
+                    continue
+                
+                # Create log entry
+                mobile_log = MobileLog.objects.create(
+                    user=request.user,
+                    level=level,
+                    tag=tag,
+                    message=message,
+                    device_info=log_data.get('device_info', '').strip()[:200],
+                    app_version=log_data.get('app_version', '').strip()[:50],
+                    stack_trace=log_data.get('stack_trace', '').strip(),
+                    extra_data=log_data.get('extra_data', {}) or {}
+                )
+                created_logs.append(mobile_log.id)
+                
+            except Exception as e:
+                errors.append(f'Error creating log entry: {str(e)}')
+        
+        if created_logs:
+            return Response({
+                'success': True,
+                'created': len(created_logs),
+                'log_ids': created_logs,
+                'errors': errors if errors else None
+            }, status=status.HTTP_201_CREATED)
+        else:
+            return Response({
+                'success': False,
+                'errors': errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Exception as e:
+        return Response({
+            'success': False,
+            'error': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

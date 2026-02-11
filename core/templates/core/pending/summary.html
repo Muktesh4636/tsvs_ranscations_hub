@@ -86,20 +86,16 @@
                 {% for item in clients_owe_you %}
                 <tr>
                     <td>
-                        {% ifchanged item.client.pk %}
-                            {{ today|date:"Y-m-d" }}
-                        {% endifchanged %}
+                        {{ today|date:"Y-m-d" }}
                     </td>
                     <td>
-                        {% ifchanged item.client.pk %}
-                            {% if item.client.name == "VENU" %}
-                                VENU
-                            {% elif item.client.code %}
-                                <span style="color: var(--muted); font-size: 13px;">{{ item.client.code }}</span>
-                            {% else %}
-                                <span style="color: var(--muted); font-size: 13px;">-</span>
-                            {% endif %}
-                        {% endifchanged %}
+                        {% if item.client.name == "VENU" %}
+                            VENU
+                        {% elif item.client.code %}
+                            <span style="color: var(--muted); font-size: 13px;">{{ item.client.code }}</span>
+                        {% else %}
+                            <span style="color: var(--muted); font-size: 13px;">-</span>
+                        {% endif %}
                     </td>
                     <td>{{ item.exchange.name }}{% if item.exchange.code %} ({{ item.exchange.code }}){% endif %}</td>
                     <td>{{ item.account.funding|currency_inr }}</td>
@@ -174,20 +170,16 @@
                 {% for item in you_owe_clients %}
                 <tr>
                     <td>
-                        {% ifchanged item.client.pk %}
-                            {{ today|date:"Y-m-d" }}
-                        {% endifchanged %}
+                        {{ today|date:"Y-m-d" }}
                     </td>
                     <td>
-                        {% ifchanged item.client.pk %}
-                            {% if item.client.name == "VENU" %}
-                                VENU
-                            {% elif item.client.code %}
-                                <span style="color: var(--muted); font-size: 13px;">{{ item.client.code }}</span>
-                            {% else %}
-                                <span style="color: var(--muted); font-size: 13px;">-</span>
-                            {% endif %}
-                        {% endifchanged %}
+                        {% if item.client.name == "VENU" %}
+                            VENU
+                        {% elif item.client.code %}
+                            <span style="color: var(--muted); font-size: 13px;">{{ item.client.code }}</span>
+                        {% else %}
+                            <span style="color: var(--muted); font-size: 13px;">-</span>
+                        {% endif %}
                     </td>
                     <td>{{ item.exchange.name }}{% if item.exchange.code %} ({{ item.exchange.code }}){% endif %}</td>
                     <td>{{ item.account.funding|currency_inr }}</td>

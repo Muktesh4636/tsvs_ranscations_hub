@@ -17,7 +17,7 @@
         <label for="week_start" class="field-label" style="margin: 0;">Week Start (Monday):</label>
         <input type="date" id="week_start" name="week_start" value="{{ week_start|date:'Y-m-d' }}" class="field-input" style="width: auto; max-width: 200px;">
         <button type="submit" class="btn btn-primary">View Report</button>
-        <a href="{% url 'reports:export_csv' %}?type=all&start_date={{ week_start|date:'Y-m-d' }}&end_date={{ week_end|date:'Y-m-d' }}" class="btn">Export CSV</a>
+        <a href="{% url 'api-export-reports-csv' %}?type=all&start_date={{ week_start|date:'Y-m-d' }}&end_date={{ week_end|date:'Y-m-d' }}" class="btn">Export CSV</a>
     </form>
 </div>
 

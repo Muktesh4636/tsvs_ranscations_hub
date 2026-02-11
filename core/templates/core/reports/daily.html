@@ -17,7 +17,7 @@
         <label for="date" class="field-label" style="margin: 0;">Select Date:</label>
         <input type="date" id="date" name="date" value="{{ report_date|date:'Y-m-d' }}" class="field-input" style="width: auto; max-width: 200px;">
         <button type="submit" class="btn btn-primary">View Report</button>
-        <a href="{% url 'reports:export_csv' %}?type=all&start_date={{ report_date|date:'Y-m-d' }}&end_date={{ report_date|date:'Y-m-d' }}" class="btn">Export CSV</a>
+        <a href="{% url 'api-export-reports-csv' %}?type=all&start_date={{ report_date|date:'Y-m-d' }}&end_date={{ report_date|date:'Y-m-d' }}" class="btn">Export CSV</a>
     </form>
 </div>
 
