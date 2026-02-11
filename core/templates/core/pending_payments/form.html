@@ -1,0 +1,69 @@
+{% extends "core/base.html" %}
+
+{% block title %}{% if is_edit %}Edit{% else %}Add{% endif %} Transaction · Transaction Hub{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>{% if is_edit %}✏️ Edit{% else %}➕ Add{% endif %} Transaction</h1>
+        <p class="text-muted">Record money given to or received from a client</p>
+    </div>
+</div>
+
+<div style="max-width: 600px; background: #fff; padding: 32px; border-radius: 12px; border: 1px solid var(--border);">
+    <form method="post">
+        {% csrf_token %}
+        
+        <div class="form-row">
+            <label class="field-label">Client</label>
+            {% if is_edit %}
+                <input type="text" class="field-input" value="{{ transaction.client.name }}" disabled>
+                <input type="hidden" name="client" value="{{ transaction.client.pk }}">
+            {% else %}
+                <select name="client" class="field-input" required>
+                    <option value="">Select a client...</option>
+                    {% for client in clients %}
+                        <option value="{{ client.pk }}">{{ client.name }} ({{ client.code|default:"No Code" }})</option>
+                    {% endfor %}
+                </select>
+            {% endif %}
+        </div>
+
+        <div class="form-row">
+            <label class="field-label">Transaction Type</label>
+            <div style="display: flex; gap: 16px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="radio" name="type" value="GIVEN" {% if transaction.type == 'GIVEN' or not is_edit %}checked{% endif %} required>
+                    <span>GIVEN (Money I gave)</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="radio" name="type" value="RECEIVED" {% if transaction.type == 'RECEIVED' %}checked{% endif %} required>
+                    <span>RECEIVED (Money client gave)</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <label class="field-label">Amount (₹)</label>
+            <input type="number" name="amount" class="field-input" value="{{ transaction.amount|default:'' }}" min="1" step="1" required placeholder="Enter amount">
+        </div>
+
+        <div class="form-row">
+            <label class="field-label">Date & Time</label>
+            <input type="datetime-local" name="date" class="field-input" value="{{ transaction.date|date:'Y-m-d\TH:i'|default:today }}" required>
+        </div>
+
+        <div class="form-row">
+            <label class="field-label">Notes (Optional)</label>
+            <textarea name="notes" class="field-input" rows="3" placeholder="Add any details...">{{ transaction.notes|default:'' }}</textarea>
+        </div>
+
+        <div style="margin-top: 32px; display: flex; gap: 12px;">
+            <button type="submit" class="btn btn-primary" style="flex: 1;">
+                {% if is_edit %}Update Transaction{% else %}Record Transaction{% endif %}
+            </button>
+            <a href="{% url 'pending_payments_list' %}" class="btn" style="flex: 1; text-align: center;">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

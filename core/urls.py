@@ -83,7 +83,7 @@ urlpatterns = [
     path('transactions/<int:pk>/edit/', views.transaction_edit, name='transaction_edit'),
     path('transactions/<int:pk>/delete/', views.transaction_delete, name='transaction_delete'),
     
-    # Pending Payments
+    # Settlements
     path('pending/', views.pending_summary, name='pending_summary'),
     path('pending/export/', views.export_pending_csv, name='export_pending_csv'),
     path('pending/export/<int:client_id>/', views.export_client_pending_csv, name='export_client_pending_csv'),
@@ -102,6 +102,12 @@ urlpatterns = [
 
     # APK Downloads
     path('download/apk/', views.download_apk, name='download_apk'),
+    
+    # Pending Payments (New System)
+    path('pending-payments/', views.pending_payments_list, name='pending_payments_list'),
+    path('pending-payments/add/', views.pending_payment_create, name='pending_payment_create'),
+    path('pending-payments/<int:pk>/edit/', views.pending_payment_edit, name='pending_payment_edit'),
+    path('pending-payments/<int:pk>/delete/', views.pending_payment_delete, name='pending_payment_delete'),
     
     # Logs Dashboard
     path('logs/', views.logs_dashboard, name='logs_dashboard'),

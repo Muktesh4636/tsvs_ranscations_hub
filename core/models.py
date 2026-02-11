@@ -68,6 +68,7 @@ class Client(TimeStampedModel):
     referred_by = models.CharField(max_length=200, blank=True, null=True)
     is_company_client = models.BooleanField(default=False)
     user = models.ForeignKey('CustomUser', on_delete=models.SET_NULL, null=True, blank=True, related_name='clients')
+    pending_balance = models.BigIntegerField(default=0)
     
     class Meta:
         ordering = ['name']
@@ -875,3 +876,79 @@ class MobileLog(TimeStampedModel):
     
     def __str__(self):
         return f"[{self.level}] {self.tag}: {self.message[:50]}"
+
+
+class PendingPaymentTransaction(TimeStampedModel):
+    """
+    Tracks money given to and received from clients.
+    Formula: BALANCE = TOTAL_GIVEN - TOTAL_RECEIVED
+    """
+    TYPE_CHOICES = [
+        ('GIVEN', 'GIVEN'),
+        ('RECEIVED', 'RECEIVED'),
+    ]
+    
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name='pending_transactions')
+    date = models.DateTimeField()
+    type = models.CharField(max_length=10, choices=TYPE_CHOICES)
+    amount = models.BigIntegerField(validators=[MinValueValidator(1)])
+    notes = models.TextField(blank=True, null=True)
+    created_by = models.ForeignKey('CustomUser', on_delete=models.SET_NULL, null=True, related_name='created_pending_transactions')
+
+    class Meta:
+        ordering = ['-date', '-id']
+
+    def __str__(self):
+        return f"{self.type} - {self.client.name} - {self.amount}"
+
+    def save(self, *args, **kwargs):
+        """
+        Live Running Balance Logic:
+        BALANCE = TOTAL_GIVEN - TOTAL_RECEIVED
+        """
+        is_new = self.pk is None
+        old_amount = 0
+        old_type = None
+        
+        if not is_new:
+            # Get the original transaction to reverse its effect
+            old_instance = PendingPaymentTransaction.objects.get(pk=self.pk)
+            old_amount = old_instance.amount
+            old_type = old_instance.type
+
+        # Use atomic transaction to ensure balance consistency
+        from django.db import transaction as db_transaction
+        with db_transaction.atomic():
+            # 1. Reverse old effect if editing
+            if not is_new:
+                if old_type == 'GIVEN':
+                    self.client.pending_balance -= old_amount
+                elif old_type == 'RECEIVED':
+                    self.client.pending_balance += old_amount
+            
+            # 2. Apply new effect
+            if self.type == 'GIVEN':
+                self.client.pending_balance += self.amount
+            elif self.type == 'RECEIVED':
+                self.client.pending_balance -= self.amount
+            
+            # 3. Save client and transaction
+            self.client.save(update_fields=['pending_balance'])
+            super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        """
+        Delete Transaction Logic:
+        Reverse the effect of the transaction on the client's balance.
+        """
+        from django.db import transaction as db_transaction
+        with db_transaction.atomic():
+            if self.type == 'GIVEN':
+                self.client.pending_balance -= self.amount
+            elif self.type == 'RECEIVED':
+                self.client.pending_balance += self.amount
+            
+            self.client.save(update_fields=['pending_balance'])
+            super().delete(*args, **kwargs)
+
+

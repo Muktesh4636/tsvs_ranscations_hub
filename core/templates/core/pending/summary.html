@@ -1,8 +1,8 @@
 {% extends "core/base.html" %}
 {% load math_filters %}
 
-{% block title %}Pending Payments · Transaction Hub{% endblock %}
-{% block page_title %}Pending Payments{% endblock %}
+{% block title %}Settlements · Transaction Hub{% endblock %}
+{% block page_title %}Settlements{% endblock %}
 {% block page_subtitle %}Two separate sections: Clients owe you vs You owe clients{% endblock %}
 
 {% block content %}
@@ -251,7 +251,7 @@ function showSection(section) {
 
 function shareViaWhatsApp(csvUrl) {
     // Create a message for WhatsApp
-    const message = encodeURIComponent("Please find the pending payments report attached.");
+    const message = encodeURIComponent("Please find the settlements report attached.");
 
     // WhatsApp URL with phone number
     const whatsappUrl = `https://wa.me/9182351381?text=${message}`;

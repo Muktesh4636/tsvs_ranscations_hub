@@ -1,0 +1,118 @@
+{% extends "core/base.html" %}
+{% load math_filters %}
+
+{% block title %}Pending Payments · Transaction Hub{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>💸 Pending Payments</h1>
+        <p class="text-muted">Manage money given to and received from clients</p>
+    </div>
+    <div>
+        <a href="{% url 'pending_payment_create' %}" class="btn btn-primary">
+            <span>+ Add Transaction</span>
+        </a>
+    </div>
+</div>
+
+<!-- Summary Cards -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 24px;">
+    <div style="background: #fff; padding: 20px; border-radius: 12px; border: 1px solid var(--border);">
+        <div style="font-size: 13px; color: var(--muted); margin-bottom: 4px;">Total Receivable (Clients owe me)</div>
+        <div style="font-size: 28px; font-weight: 700; color: var(--success);">₹{{ total_receivable }}</div>
+    </div>
+    <div style="background: #fff; padding: 20px; border-radius: 12px; border: 1px solid var(--border);">
+        <div style="font-size: 13px; color: var(--muted); margin-bottom: 4px;">Total Payable (I owe clients)</div>
+        <div style="font-size: 28px; font-weight: 700; color: var(--danger);">₹{{ total_payable }}</div>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1.5fr; gap: 24px;">
+    <!-- Client Balances -->
+    <div style="background: #fff; border-radius: 12px; border: 1px solid var(--border); overflow: hidden;">
+        <div style="padding: 16px; border-bottom: 1px solid var(--border); font-weight: 600;">Client Balances</div>
+        <div style="max-height: 600px; overflow-y: auto;">
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead style="background: #f9fafb; position: sticky; top: 0;">
+                    <tr>
+                        <th style="padding: 12px; text-align: left; font-size: 12px; color: var(--muted);">Client</th>
+                        <th style="padding: 12px; text-align: right; font-size: 12px; color: var(--muted);">Balance</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for client in clients %}
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 12px;">
+                            <div style="font-weight: 500;">{{ client.name }}</div>
+                            <div style="font-size: 11px; color: var(--muted);">{{ client.code|default:"" }}</div>
+                        </td>
+                        <td style="padding: 12px; text-align: right; font-weight: 600; {% if client.pending_balance > 0 %}color: var(--success);{% elif client.pending_balance < 0 %}color: var(--danger);{% endif %}">
+                            ₹{{ client.pending_balance|abs }}
+                            <div style="font-size: 10px; font-weight: normal;">
+                                {% if client.pending_balance > 0 %}
+                                    Client owes me
+                                {% elif client.pending_balance < 0 %}
+                                    I owe client
+                                {% else %}
+                                    Settled
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="2" style="padding: 24px; text-align: center; color: var(--muted);">No clients found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Recent Transactions -->
+    <div style="background: #fff; border-radius: 12px; border: 1px solid var(--border); overflow: hidden;">
+        <div style="padding: 16px; border-bottom: 1px solid var(--border); font-weight: 600;">Recent Transactions</div>
+        <div style="max-height: 600px; overflow-y: auto;">
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead style="background: #f9fafb; position: sticky; top: 0;">
+                    <tr>
+                        <th style="padding: 12px; text-align: left; font-size: 12px; color: var(--muted);">Date</th>
+                        <th style="padding: 12px; text-align: left; font-size: 12px; color: var(--muted);">Client</th>
+                        <th style="padding: 12px; text-align: left; font-size: 12px; color: var(--muted);">Type</th>
+                        <th style="padding: 12px; text-align: right; font-size: 12px; color: var(--muted);">Amount</th>
+                        <th style="padding: 12px; text-align: center; font-size: 12px; color: var(--muted);">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for tx in recent_transactions %}
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 12px; font-size: 13px;">{{ tx.date|date:"d M, Y H:i" }}</td>
+                        <td style="padding: 12px; font-weight: 500;">{{ tx.client.name }}</td>
+                        <td style="padding: 12px;">
+                            <span style="padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; {% if tx.type == 'GIVEN' %}background: #dcfce7; color: var(--success);{% else %}background: #fee2e2; color: var(--danger);{% endif %}">
+                                {{ tx.type }}
+                            </span>
+                        </td>
+                        <td style="padding: 12px; text-align: right; font-weight: 600;">₹{{ tx.amount }}</td>
+                        <td style="padding: 12px; text-align: center;">
+                            <div style="display: flex; gap: 8px; justify-content: center;">
+                                <a href="{% url 'pending_payment_edit' tx.pk %}" style="text-decoration: none; font-size: 16px;">✏️</a>
+                                <form method="post" action="{% url 'pending_payment_delete' tx.pk %}" style="display: inline;" onsubmit="return confirm('Delete this transaction?');">
+                                    {% csrf_token %}
+                                    <button type="submit" style="background: none; border: none; cursor: pointer; font-size: 16px; padding: 0;">🗑️</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5" style="padding: 24px; text-align: center; color: var(--muted);">No transactions found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

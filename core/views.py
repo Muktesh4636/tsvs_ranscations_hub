@@ -1614,7 +1614,7 @@ def calculate_net_tallies_from_transactions(client_exchange, as_of_date=None):
 @login_required
 def pending_summary(request):
     """
-    Pending Payments Summary.
+    Settlements Summary.
     
     TODO: Add your new formulas and logic here.
     """
@@ -1896,7 +1896,7 @@ def pending_summary(request):
 def export_pending_csv(request):
     """
     Export pending payments report as CSV.
-    Export format mirrors Pending Payments UI table exactly.
+    Export format mirrors Settlements UI table exactly.
     """
     import csv
     
@@ -2064,7 +2064,7 @@ def export_pending_csv(request):
     
     # Create CSV response
     response = HttpResponse(content_type='text/csv')
-    filename = f"pending_payments_{date.today().strftime('%Y%m%d')}.csv"
+    filename = f"settlements_{date.today().strftime('%Y%m%d')}.csv"
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     
     writer = csv.writer(response)
@@ -2271,7 +2271,7 @@ def export_client_pending_csv(request, client_id):
 
     # Create CSV response
     response = HttpResponse(content_type='text/csv')
-    response['Content-Disposition'] = f'attachment; filename="{client.name}_pending_payments.csv"'
+    response['Content-Disposition'] = f'attachment; filename="{client.name}_settlements.csv"'
 
     writer = csv.writer(response)
 
@@ -6460,3 +6460,93 @@ def logs_dashboard(request):
     }
     
     return render(request, 'core/logs/dashboard.html', context)
+@login_required
+def pending_payments_list(request):
+    """List all clients and their pending balances."""
+    from .models import Client, PendingPaymentTransaction
+    
+    clients = Client.objects.filter(user=request.user).order_by('name')
+    recent_transactions = PendingPaymentTransaction.objects.filter(
+        client__user=request.user
+    ).select_related('client').order_by('-date', '-id')[:20]
+    
+    total_receivable = sum(c.pending_balance for c in clients if c.pending_balance > 0)
+    total_payable = abs(sum(c.pending_balance for c in clients if c.pending_balance < 0))
+    
+    return render(request, 'core/pending_payments/list.html', {
+        'clients': clients,
+        'recent_transactions': recent_transactions,
+        'total_receivable': total_receivable,
+        'total_payable': total_payable,
+    })
+
+@login_required
+def pending_payment_create(request):
+    """Add a new GIVEN or RECEIVED transaction."""
+    from .models import Client, PendingPaymentTransaction
+    from django.contrib import messages
+    
+    if request.method == 'POST':
+        client_id = request.POST.get('client')
+        amount = int(request.POST.get('amount', 0))
+        type = request.POST.get('type')
+        date = request.POST.get('date')
+        notes = request.POST.get('notes', '')
+        
+        client = get_object_or_404(Client, pk=client_id, user=request.user)
+        
+        PendingPaymentTransaction.objects.create(
+            client=client,
+            amount=amount,
+            type=type,
+            date=date,
+            notes=notes,
+            created_by=request.user
+        )
+        
+        messages.success(request, f"Transaction recorded for {client.name}")
+        return redirect('pending_payments_list')
+    
+    clients = Client.objects.filter(user=request.user).order_by('name')
+    return render(request, 'core/pending_payments/form.html', {
+        'clients': clients,
+        'today': timezone.now().strftime('%Y-%m-%dT%H:%M'),
+    })
+
+@login_required
+def pending_payment_edit(request, pk):
+    """Edit an existing pending payment transaction."""
+    from .models import PendingPaymentTransaction
+    from django.contrib import messages
+    
+    transaction = get_object_or_404(PendingPaymentTransaction, pk=pk, client__user=request.user)
+    
+    if request.method == 'POST':
+        transaction.amount = int(request.POST.get('amount', 0))
+        transaction.type = request.POST.get('type')
+        transaction.date = request.POST.get('date')
+        transaction.notes = request.POST.get('notes', '')
+        transaction.save()
+        
+        messages.success(request, "Transaction updated successfully")
+        return redirect('pending_payments_list')
+    
+    return render(request, 'core/pending_payments/form.html', {
+        'transaction': transaction,
+        'clients': [transaction.client],
+        'is_edit': True,
+    })
+
+@login_required
+def pending_payment_delete(request, pk):
+    """Delete a pending payment transaction."""
+    from .models import PendingPaymentTransaction
+    from django.contrib import messages
+    
+    transaction = get_object_or_404(PendingPaymentTransaction, pk=pk, client__user=request.user)
+    
+    if request.method == 'POST':
+        transaction.delete()
+        messages.success(request, "Transaction deleted successfully")
+        
+    return redirect('pending_payments_list')

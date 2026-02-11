@@ -295,7 +295,7 @@ def api_export_pending_csv(request):
     
     # Create CSV response
     response = HttpResponse(content_type='text/csv')
-    filename = f"pending_payments_{date.today().strftime('%Y%m%d')}.csv"
+    filename = f"settlements_{date.today().strftime('%Y%m%d')}.csv"
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
     
     writer = csv.writer(response)
