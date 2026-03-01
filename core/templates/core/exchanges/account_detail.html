@@ -7,10 +7,14 @@
 
 {% block page_actions %}
 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-    <a href="{% url 'add_funding' account.pk %}" class="btn btn-primary">Add Funding</a>
-    <a href="{% url 'update_balance' account.pk %}" class="btn btn-primary">Update Balance</a>
-    <a href="{% url 'client_exchange_edit' account.pk %}" class="btn btn-primary">Edit Percentage</a>
-    <a href="{% url 'client_detail' account.client.pk %}" class="btn">Back to Client</a>
+    {% if request.resolver_match.url_name == 'payments_exchange_account_detail' %}
+        <a href="{% url 'pending_payment_create' %}?client={{ account.client.pk }}" class="btn btn-primary">Add Transaction</a>
+    {% else %}
+        <a href="{% url 'add_funding' account.pk %}" class="btn btn-primary">Add Funding</a>
+        <a href="{% url 'update_balance' account.pk %}" class="btn btn-primary">Update Balance</a>
+        <a href="{% url 'client_exchange_edit' account.pk %}" class="btn btn-primary">Edit Percentage</a>
+    {% endif %}
+    <a href="{% if request.resolver_match.url_name == 'payments_exchange_account_detail' %}{% url 'payments_client_detail' account.client.pk %}{% else %}{% url 'client_detail' account.client.pk %}{% endif %}" class="btn">Back to Client</a>
 </div>
 {% endblock %}
 
@@ -18,54 +22,106 @@
 {% with pnl=account.compute_client_pnl share=account.compute_my_share remaining=account.get_remaining_settlement_amount %}
 <!-- Account Summary Cards -->
 <div class="card-grid" style="margin-bottom: 24px;">
-    <div class="card">
-        <div class="card-title">Funding</div>
-        <div class="card-value">{{ account.funding|currency_inr }}</div>
-    </div>
-    <div class="card">
-        <div class="card-title">Exchange Balance</div>
-        <div class="card-value">{{ account.exchange_balance|currency_inr }}</div>
-    </div>
-    <div class="card">
-        <div class="card-title">Client PnL</div>
-        <div class="card-value {% if pnl > 0 %}positive{% elif pnl < 0 %}negative{% endif %}">
-            {{ pnl|currency_inr }}
+    {% if request.resolver_match.url_name == 'payments_exchange_account_detail' %}
+        <div class="card">
+            <div class="card-title">Client Name</div>
+            <div class="card-value">
+                <a href="{% url 'payments_client_detail' account.client.pk %}" style="color: var(--accent); text-decoration: none;">
+                    {{ account.client.name }}{% if account.client.code %} ({{ account.client.code }}){% endif %}
+                </a>
+            </div>
         </div>
-    </div>
-    <div class="card">
-        <div class="card-title">Final Share</div>
-        <div class="card-value">
-            {% if share == 0 %}
-                <span style="color: var(--muted);">N.A (Zero Share)</span>
-            {% else %}
-                {{ share|currency_inr }}
-            {% endif %}
+        <div class="card">
+            <div class="card-title">Exchange & Version</div>
+            <div class="card-value">
+                {{ account.exchange.name }}{% if account.exchange.code %} ({{ account.exchange.code }}){% endif %}
+                {% if account.exchange.version_name %}
+                    <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--muted);">Version: {{ account.exchange.version_name }}</div>
+                {% endif %}
+            </div>
         </div>
-    </div>
-    <div class="card">
-        <div class="card-title">Remaining Settlement</div>
-        <div class="card-value">
-            {% if share == 0 %}
-                <span style="color: var(--muted);">N.A</span>
-            {% else %}
-                <strong style="color: var(--accent);">{{ remaining.remaining|currency_inr }}</strong>
-            {% endif %}
+        <div class="card">
+            <div class="card-title">Client PnL</div>
+            <div class="card-value {% if pnl > 0 %}negative{% elif pnl < 0 %}positive{% endif %}">
+                {{ pnl|currency_inr }}
+                {% if pnl > 0 %}
+                    <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--danger);">I will give money to client</div>
+                {% elif pnl < 0 %}
+                    <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--success);">Client will pay money to me</div>
+                {% else %}
+                    <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--muted);">No profit/loss</div>
+                {% endif %}
+            </div>
         </div>
-    </div>
-    <div class="card">
-        <div class="card-title">Share Percentage</div>
-        <div class="card-value">
-            {% if pnl < 0 %}
-                {{ account.loss_share_percentage|default:account.my_percentage|floatformat:2 }}% (Loss)
-            {% elif pnl > 0 %}
-                {{ account.profit_share_percentage|default:account.my_percentage|floatformat:2 }}% (Profit)
-            {% else %}
-                {{ account.my_percentage|floatformat:2 }}%
-            {% endif %}
+        <div class="card">
+            <div class="card-title">Remaining Settlement</div>
+            <div class="card-value">
+                {% if share == 0 %}
+                    <span style="color: var(--muted);">₹0</span>
+                {% else %}
+                    {% if pnl > 0 %}
+                        <strong style="color: var(--danger);">{{ share|abs|currency_inr }}</strong>
+                        <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--danger);">I need to pay client</div>
+                    {% elif pnl < 0 %}
+                        <strong style="color: var(--success);">{{ share|abs|currency_inr }}</strong>
+                        <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--success);">Client needs to pay me</div>
+                    {% else %}
+                        <span style="color: var(--muted);">₹0</span>
+                    {% endif %}
+                {% endif %}
+            </div>
         </div>
+    {% else %}
+        <div class="card">
+            <div class="card-title">Funding</div>
+            <div class="card-value">{{ account.funding|currency_inr }}</div>
+        </div>
+        <div class="card">
+            <div class="card-title">Exchange Balance</div>
+            <div class="card-value">{{ account.exchange_balance|currency_inr }}</div>
+        </div>
+        <div class="card">
+            <div class="card-title">Client PnL</div>
+            <div class="card-value {% if pnl > 0 %}positive{% elif pnl < 0 %}negative{% endif %}">
+                {{ pnl|currency_inr }}
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title">Final Share</div>
+            <div class="card-value">
+                {% if share == 0 %}
+                    <span style="color: var(--muted);">N.A (Zero Share)</span>
+                {% else %}
+                    {{ share|currency_inr }}
+                {% endif %}
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title">Remaining Settlement</div>
+            <div class="card-value">
+                {% if share == 0 %}
+                    <span style="color: var(--muted);">N.A</span>
+                {% else %}
+                    <strong style="color: var(--accent);">{{ remaining.remaining|currency_inr }}</strong>
+                {% endif %}
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title">Share Percentage</div>
+            <div class="card-value">
+                {% if pnl < 0 %}
+                    {{ account.loss_share_percentage|default:account.my_percentage|floatformat:2 }}% (Loss)
+                {% elif pnl > 0 %}
+                    {{ account.profit_share_percentage|default:account.my_percentage|floatformat:2 }}% (Profit)
+                {% else %}
+                    {{ account.my_percentage|floatformat:2 }}%
+        {% endif %}
     </div>
 </div>
+{% endif %}
+</div>
 
+{% if request.resolver_match.url_name != 'payments_exchange_account_detail' %}
 <!-- Account Information -->
 <div style="background: var(--bg-content); border-radius: 8px; padding: 24px; border: 1px solid var(--border); margin-bottom: 24px;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -76,7 +132,7 @@
         <div>
             <div style="font-size: 13px; color: var(--muted); margin-bottom: 4px;">Client</div>
             <div style="font-weight: 500;">
-                <a href="{% url 'client_detail' account.client.pk %}" style="color: var(--accent); text-decoration: none;">
+                <a href="{% if request.resolver_match.url_name == 'payments_exchange_account_detail' %}{% url 'payments_client_detail' account.client.pk %}{% else %}{% url 'client_detail' account.client.pk %}{% endif %}" style="color: var(--accent); text-decoration: none;">
                     {{ account.client.name }}{% if account.client.code %} ({{ account.client.code }}){% endif %}
                 </a>
             </div>
@@ -129,7 +185,9 @@
     </div>
 </div>
 {% endif %}
+{% endif %}
 
+{% if request.resolver_match.url_name != 'payments_exchange_account_detail' %}
 <!-- Settlements (MASKED SHARE SETTLEMENT SYSTEM) -->
 {% if settlements %}
 <div style="background: var(--bg-content); border-radius: 8px; padding: 0; border: 1px solid var(--border); overflow: hidden; margin-bottom: 24px;">
@@ -159,12 +217,50 @@
     </div>
 </div>
 {% endif %}
+{% endif %}
 
-<!-- Recent Transactions -->
+<!-- Payment Transactions -->
+{% if request.resolver_match.url_name == 'payments_exchange_account_detail' %}
+<div style="background: var(--bg-content); border-radius: 8px; padding: 0; border: 1px solid var(--border); overflow: hidden; margin-bottom: 24px;">
+    <div class="table-header">
+        <span>Payment Transactions</span>
+        <a href="{% url 'payments_transaction_list' %}" class="btn btn-sm" style="margin-left: auto;">View All Payments</a>
+    </div>
+    <div class="table-wrapper" style="border: none; box-shadow: none;">
+        <table>
+            <thead>
+            <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Amount</th>
+                <th>Notes</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for tx in account.client.pending_transactions.all %}
+            <tr>
+                <td>{{ tx.date|date:"M d, Y H:i" }}</td>
+                <td>{{ tx.type }}</td>
+                <td>{{ tx.amount|currency_inr }}</td>
+                <td>{{ tx.notes|default:"—" }}</td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="4">No payment transactions</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% if request.resolver_match.url_name != 'payments_exchange_account_detail' %}
+<!-- Client Transactions -->
 <div style="background: var(--bg-content); border-radius: 8px; padding: 0; border: 1px solid var(--border); overflow: hidden;">
     <div class="table-header">
-        <span>Recent Transactions</span>
-        <a href="{% url 'transaction_list' %}?client_exchange={{ account.pk }}" class="btn btn-sm" style="margin-left: auto;">View All</a>
+        <span>Client Transactions</span>
+        <a href="{% if request.resolver_match.url_name == 'payments_exchange_account_detail' %}{% url 'payments_transaction_list' %}{% else %}{% url 'transaction_list' %}{% endif %}?client_exchange={{ account.pk }}" class="btn btn-sm" style="margin-left: auto;">View All</a>
     </div>
     <div class="table-wrapper" style="border: none; box-shadow: none;">
         {% if transactions %}
@@ -209,12 +305,13 @@
         </table>
         {% else %}
         <div style="padding: 40px; text-align: center; color: var(--muted);">
-            <div style="font-size: 16px; margin-bottom: 8px;">No Transactions</div>
-            <div style="font-size: 14px;">Start by adding funding or updating the exchange balance.</div>
+            <div style="font-size: 16px; margin-bottom: 8px;">No Client Transactions</div>
+            <div style="font-size: 14px;">Client transactions (funding, trades, fees) will appear here.</div>
         </div>
         {% endif %}
     </div>
 </div>
+{% endif %}
 {% endwith %}
 {% endblock %}
 

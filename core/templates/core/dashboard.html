@@ -20,20 +20,6 @@
         <div class="card-value">{{ total_accounts }}</div>
     </div>
     <div class="card">
-        <div class="card-title">Total Funding</div>
-        <div class="card-value">{{ total_funding|currency_inr }}</div>
-    </div>
-    <div class="card">
-        <div class="card-title">Total Exchange Balance</div>
-        <div class="card-value">{{ total_exchange_balance|currency_inr }}</div>
-    </div>
-    <div class="card">
-        <div class="card-title">Total Client PnL</div>
-        <div class="card-value {% if total_client_pnl > 0 %}positive{% elif total_client_pnl < 0 %}negative{% endif %}">
-            {{ total_client_pnl|currency_inr }}
-        </div>
-    </div>
-    <div class="card">
         <div class="card-title">Total My Share</div>
         <div class="card-value {% if total_my_share > 0 %}positive{% elif total_my_share < 0 %}negative{% endif %}">
             {{ total_my_share|currency_inr }}
@@ -60,7 +46,7 @@
             <tbody>
                 {% for account in recent_accounts %}
                     {% with pnl=account.compute_client_pnl share=account.compute_my_share %}
-                    <tr>
+                    <tr style="cursor: pointer;" onclick="window.location='{% if request.resolver_match.url_name == 'payments_dashboard' %}{% url 'payments_client_detail' account.client.pk %}{% else %}{% url 'client_detail' account.client.pk %}{% endif %}'">
                         <td>{{ account.client.name }}</td>
                         <td>{{ account.exchange.name }}</td>
                         <td>{{ account.funding|currency_inr }}</td>
@@ -82,7 +68,9 @@
                             {% endif %}
                         </td>
                         <td>
-                            <a href="{% url 'exchange_account_detail' account.pk %}" class="btn btn-sm">View</a>
+                            <div style="display: flex; gap: 8px;">
+                                <a href="{% if request.resolver_match.url_name == 'payments_dashboard' %}{% url 'payments_exchange_account_detail' account.pk %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" class="btn btn-sm">View</a>
+                            </div>
                         </td>
                     </tr>
                     {% endwith %}

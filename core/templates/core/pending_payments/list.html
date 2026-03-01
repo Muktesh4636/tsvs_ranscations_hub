@@ -28,10 +28,20 @@
     </div>
 </div>
 
-<div style="display: grid; grid-template-columns: 1fr 1.5fr; gap: 24px;">
+<div style="display: grid; grid-template-columns: 1fr; gap: 24px;">
+    <!-- Filter Buttons -->
+    <div style="background: #fff; border-radius: 12px; border: 1px solid var(--border); padding: 16px;">
+        <div style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--text);">Filter by Balance:</div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <a href="?balance=all" class="btn {% if balance_filter == 'all' %}btn-primary{% else %}btn-outline{% endif %}" style="font-size: 13px;">All Clients</a>
+            <a href="?balance=owe_me" class="btn {% if balance_filter == 'owe_me' %}btn-primary{% else %}btn-outline{% endif %}" style="font-size: 13px;">Clients Owe Me</a>
+            <a href="?balance=i_owe" class="btn {% if balance_filter == 'i_owe' %}btn-primary{% else %}btn-outline{% endif %}" style="font-size: 13px;">I Owe Clients</a>
+        </div>
+    </div>
+
     <!-- Client Balances -->
     <div style="background: #fff; border-radius: 12px; border: 1px solid var(--border); overflow: hidden;">
-        <div style="padding: 16px; border-bottom: 1px solid var(--border); font-weight: 600;">Client Balances</div>
+        <div style="padding: 16px; border-bottom: 1px solid var(--border); font-weight: 600;">Client Balances {% if balance_filter == 'owe_me' %}(Clients Owe Me){% elif balance_filter == 'i_owe' %}(I Owe Clients){% endif %}</div>
         <div style="max-height: 600px; overflow-y: auto;">
             <table style="width: 100%; border-collapse: collapse;">
                 <thead style="background: #f9fafb; position: sticky; top: 0;">
@@ -42,7 +52,7 @@
                 </thead>
                 <tbody>
                     {% for client in clients %}
-                    <tr style="border-bottom: 1px solid var(--border);">
+                    <tr style="border-bottom: 1px solid var(--border); cursor: pointer;" onclick="window.location='{% url 'payments_client_detail' client.pk %}'">
                         <td style="padding: 12px;">
                             <div style="font-weight: 500;">{{ client.name }}</div>
                             <div style="font-size: 11px; color: var(--muted);">{{ client.code|default:"" }}</div>
@@ -63,51 +73,6 @@
                     {% empty %}
                     <tr>
                         <td colspan="2" style="padding: 24px; text-align: center; color: var(--muted);">No clients found.</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <!-- Recent Transactions -->
-    <div style="background: #fff; border-radius: 12px; border: 1px solid var(--border); overflow: hidden;">
-        <div style="padding: 16px; border-bottom: 1px solid var(--border); font-weight: 600;">Recent Transactions</div>
-        <div style="max-height: 600px; overflow-y: auto;">
-            <table style="width: 100%; border-collapse: collapse;">
-                <thead style="background: #f9fafb; position: sticky; top: 0;">
-                    <tr>
-                        <th style="padding: 12px; text-align: left; font-size: 12px; color: var(--muted);">Date</th>
-                        <th style="padding: 12px; text-align: left; font-size: 12px; color: var(--muted);">Client</th>
-                        <th style="padding: 12px; text-align: left; font-size: 12px; color: var(--muted);">Type</th>
-                        <th style="padding: 12px; text-align: right; font-size: 12px; color: var(--muted);">Amount</th>
-                        <th style="padding: 12px; text-align: center; font-size: 12px; color: var(--muted);">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for tx in recent_transactions %}
-                    <tr style="border-bottom: 1px solid var(--border);">
-                        <td style="padding: 12px; font-size: 13px;">{{ tx.date|date:"d M, Y H:i" }}</td>
-                        <td style="padding: 12px; font-weight: 500;">{{ tx.client.name }}</td>
-                        <td style="padding: 12px;">
-                            <span style="padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; {% if tx.type == 'GIVEN' %}background: #dcfce7; color: var(--success);{% else %}background: #fee2e2; color: var(--danger);{% endif %}">
-                                {{ tx.type }}
-                            </span>
-                        </td>
-                        <td style="padding: 12px; text-align: right; font-weight: 600;">₹{{ tx.amount }}</td>
-                        <td style="padding: 12px; text-align: center;">
-                            <div style="display: flex; gap: 8px; justify-content: center;">
-                                <a href="{% url 'pending_payment_edit' tx.pk %}" style="text-decoration: none; font-size: 16px;">✏️</a>
-                                <form method="post" action="{% url 'pending_payment_delete' tx.pk %}" style="display: inline;" onsubmit="return confirm('Delete this transaction?');">
-                                    {% csrf_token %}
-                                    <button type="submit" style="background: none; border: none; cursor: pointer; font-size: 16px; padding: 0;">🗑️</button>
-                                </form>
-                            </div>
-                        </td>
-                    </tr>
-                    {% empty %}
-                    <tr>
-                        <td colspan="5" style="padding: 24px; text-align: center; color: var(--muted);">No transactions found.</td>
                     </tr>
                     {% endfor %}
                 </tbody>

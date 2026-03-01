@@ -851,20 +851,36 @@ def dashboard(request):
     total_exchange_balance = sum(account.exchange_balance for account in all_accounts)
     total_client_pnl = sum(account.compute_client_pnl() for account in all_accounts)
     
-    # FINANCIAL INTERPRETATION: Apply sign to Total My Share
-    # - If client_pnl < 0 (LOSS): Client owes you → share is POSITIVE
-    # - If client_pnl > 0 (PROFIT): You owe client → share is NEGATIVE
-    total_my_share = Decimal(0)
-    for account in all_accounts:
-        client_pnl = account.compute_client_pnl()
-        share_amount = account.compute_my_share()
-        if client_pnl < 0:
-            # LOSS CASE: Client owes you → share is POSITIVE
-            total_my_share += share_amount
-        elif client_pnl > 0:
-            # PROFIT CASE: You owe client → share is NEGATIVE
-            total_my_share -= share_amount
-        # If client_pnl == 0, share is 0, so no change
+    # Check if this is the payments dashboard
+    is_payments_dashboard = request.resolver_match.url_name == 'payments_dashboard'
+
+    if is_payments_dashboard:
+        # For payments dashboard: total amount clients paid to me - total amount I paid to clients
+        from .models import PendingPaymentTransaction
+        total_my_share = Decimal(0)
+        payment_transactions = PendingPaymentTransaction.objects.filter(client__user=request.user)
+        for tx in payment_transactions:
+            if tx.type == 'RECEIVED':
+                # Clients paid to me - positive
+                total_my_share += tx.amount
+            elif tx.type == 'GIVEN':
+                # I paid to clients - negative
+                total_my_share -= tx.amount
+    else:
+        # FINANCIAL INTERPRETATION: Apply sign to Total My Share
+        # - If client_pnl < 0 (LOSS): Client owes you → share is POSITIVE
+        # - If client_pnl > 0 (PROFIT): You owe client → share is NEGATIVE
+        total_my_share = Decimal(0)
+        for account in all_accounts:
+            client_pnl = account.compute_client_pnl()
+            share_amount = account.compute_my_share()
+            if client_pnl < 0:
+                # LOSS CASE: Client owes you → share is POSITIVE
+                total_my_share += share_amount
+            elif client_pnl > 0:
+                # PROFIT CASE: You owe client → share is NEGATIVE
+                total_my_share -= share_amount
+            # If client_pnl == 0, share is 0, so no change
     
     # Count totals
     total_clients = Client.objects.filter(user=request.user).count()
@@ -2101,7 +2117,7 @@ def export_pending_csv(request):
                 item.get("share_percentage", item["account"].my_percentage)
             ]
             writer.writerow(row_data)
-            
+    
     # Write You Owe Clients section (if requested)
     if section in ["all", "you-owe"]:
         # Sort by client name to group them for Period/U_CODE logic
@@ -4291,7 +4307,7 @@ def report_monthly(request):
         week_end_date = min(current_date + timedelta(days=6), month_end)
 
         weekly_labels.append(f"Week {week_num} ({current_date.strftime('%d')}-{week_end_date.strftime('%d %b')})")
-
+        
         week_qs = qs.filter(date__gte=current_date, date__lte=week_end_date)
         # Profit/Loss from RECORD_PAYMENT transactions
         week_payment_qs = week_qs.filter(type='RECORD_PAYMENT')
@@ -6019,6 +6035,83 @@ def client_balance(request, client_pk):
     return render(request, "core/clients/balance.html", context)
 
 
+@login_required
+def build_apk(request):
+    """Build APK using Gradle and copy to static directory."""
+    import os
+    import subprocess
+    import shutil
+    from django.http import JsonResponse
+    from django.contrib import messages
+    from django.shortcuts import redirect
+    from django.conf import settings
+    from django.urls import reverse
+
+    try:
+        # Paths
+        base_dir = settings.BASE_DIR
+        android_app_dir = os.path.join(base_dir, 'android_app')
+        gradle_wrapper = os.path.join(android_app_dir, 'gradlew')
+        apk_source = os.path.join(android_app_dir, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk')
+        apk_dest_dir = os.path.join(base_dir, 'static', 'apk')
+        apk_dest = os.path.join(apk_dest_dir, 'app-debug.apk')
+
+        # Check if Android app directory exists
+        if not os.path.exists(android_app_dir):
+            messages.error(request, "Android app directory not found. Expected at: " + android_app_dir)
+            return redirect(reverse('dashboard'))
+
+        # Make gradlew executable
+        if os.path.exists(gradle_wrapper):
+            os.chmod(gradle_wrapper, 0o755)
+
+        # Build APK using Gradle
+        build_command = ['./gradlew', 'assembleDebug'] if os.path.exists(gradle_wrapper) else ['gradle', 'assembleDebug']
+        
+        messages.info(request, "Building APK... This may take 1-2 minutes.")
+        
+        process = subprocess.Popen(
+            build_command,
+            cwd=android_app_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        stdout, stderr = process.communicate(timeout=300)  # 5 minute timeout
+        
+        if process.returncode != 0:
+            error_msg = stderr or stdout or "Build failed with unknown error"
+            messages.error(request, f"APK build failed: {error_msg[:200]}")
+            return redirect(reverse('dashboard'))
+
+        # Check if APK was created
+        if not os.path.exists(apk_source):
+            messages.error(request, "APK build completed but file not found at: " + apk_source)
+            return redirect(reverse('dashboard'))
+
+        # Ensure destination directory exists
+        os.makedirs(apk_dest_dir, exist_ok=True)
+
+        # Copy APK to static directory
+        shutil.copy2(apk_source, apk_dest)
+        
+        file_size = os.path.getsize(apk_dest) / (1024 * 1024)  # Size in MB
+        messages.success(request, f"APK built successfully! File size: {file_size:.2f} MB")
+        
+        return redirect(reverse('download_apk'))
+        
+    except subprocess.TimeoutExpired:
+        messages.error(request, "APK build timed out. Please build manually using Android Studio.")
+        return redirect(reverse('dashboard'))
+    except FileNotFoundError:
+        messages.error(request, "Gradle not found. Please install Android Studio or Gradle.")
+        return redirect(reverse('dashboard'))
+    except Exception as e:
+        messages.error(request, f"Error building APK: {str(e)}")
+        return redirect(reverse('dashboard'))
+
+
 def download_apk(request):
     """Serve APK file for download."""
     import os
@@ -6030,7 +6123,11 @@ def download_apk(request):
 
     # Check if file exists
     if not os.path.exists(apk_path):
-        raise Http404("APK file not found")
+        from django.contrib import messages
+        from django.shortcuts import redirect
+        from django.urls import reverse
+        messages.warning(request, "APK file not found. Please build the APK first.")
+        return redirect(reverse('dashboard'))
 
     # Open and serve the file
     with open(apk_path, 'rb') as apk_file:
@@ -6464,20 +6561,90 @@ def logs_dashboard(request):
 def pending_payments_list(request):
     """List all clients and their pending balances."""
     from .models import Client, PendingPaymentTransaction
-    
+
+    # Get filter parameter
+    balance_filter = request.GET.get('balance', 'all')  # 'all', 'owe_me', 'i_owe'
+
     clients = Client.objects.filter(user=request.user).order_by('name')
+
+    # Apply balance filtering
+    if balance_filter == 'owe_me':
+        # Clients that owe money to me (positive balance)
+        clients = clients.filter(pending_balance__gt=0)
+    elif balance_filter == 'i_owe':
+        # Clients I owe money to (negative balance)
+        clients = clients.filter(pending_balance__lt=0)
+
     recent_transactions = PendingPaymentTransaction.objects.filter(
         client__user=request.user
     ).select_related('client').order_by('-date', '-id')[:20]
-    
-    total_receivable = sum(c.pending_balance for c in clients if c.pending_balance > 0)
-    total_payable = abs(sum(c.pending_balance for c in clients if c.pending_balance < 0))
-    
+
+    # Calculate totals based on filter
+    if balance_filter == 'owe_me':
+        total_receivable = sum(clients.values_list('pending_balance', flat=True))
+        total_payable = 0
+    elif balance_filter == 'i_owe':
+        total_receivable = 0
+        total_payable = abs(sum(clients.values_list('pending_balance', flat=True)))
+    else:
+        # All clients - calculate from all clients
+        all_clients = Client.objects.filter(user=request.user)
+        total_receivable = sum(c.pending_balance for c in all_clients if c.pending_balance > 0)
+        total_payable = abs(sum(c.pending_balance for c in all_clients if c.pending_balance < 0))
+
     return render(request, 'core/pending_payments/list.html', {
         'clients': clients,
         'recent_transactions': recent_transactions,
         'total_receivable': total_receivable,
         'total_payable': total_payable,
+        'balance_filter': balance_filter,
+    })
+
+@login_required
+def pending_payment_transactions_list(request):
+    """List all pending payment transactions."""
+    from .models import PendingPaymentTransaction
+
+    # Get search parameters
+    search_name = request.GET.get('name', '').strip()
+    search_usercode = request.GET.get('usercode', '').strip()
+    search_exchange = request.GET.get('exchange', '').strip()
+    search_version = request.GET.get('version', '').strip()
+
+    # Base queryset
+    transactions = PendingPaymentTransaction.objects.filter(
+        client__user=request.user
+    ).select_related('client').prefetch_related('client__exchange_accounts__exchange').order_by('-date', '-id')
+
+    # Apply filters
+    if search_name:
+        transactions = transactions.filter(client__name__icontains=search_name)
+
+    if search_usercode:
+        transactions = transactions.filter(client__code__icontains=search_usercode)
+
+    if search_exchange:
+        # Filter transactions where client has exchange accounts with matching exchange name
+        client_ids_with_exchange = Client.objects.filter(
+            user=request.user,
+            exchange_accounts__exchange__name__icontains=search_exchange
+        ).values_list('id', flat=True).distinct()
+        transactions = transactions.filter(client_id__in=client_ids_with_exchange)
+
+    if search_version:
+        # Filter transactions where client has exchange accounts with matching version
+        client_ids_with_version = Client.objects.filter(
+            user=request.user,
+            exchange_accounts__exchange__version_name__icontains=search_version
+        ).values_list('id', flat=True).distinct()
+        transactions = transactions.filter(client_id__in=client_ids_with_version)
+
+    return render(request, 'core/pending_payments/transactions.html', {
+        'transactions': transactions,
+        'search_name': search_name,
+        'search_usercode': search_usercode,
+        'search_exchange': search_exchange,
+        'search_version': search_version,
     })
 
 @login_required
@@ -6490,27 +6657,53 @@ def pending_payment_create(request):
         client_id = request.POST.get('client')
         amount = int(request.POST.get('amount', 0))
         type = request.POST.get('type')
-        date = request.POST.get('date')
+        date_str = request.POST.get('date')
         notes = request.POST.get('notes', '')
-        
+
         client = get_object_or_404(Client, pk=client_id, user=request.user)
-        
+
+        # Convert date string to datetime (set time to noon)
+        from datetime import datetime, time
+        if date_str:
+            date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+            # Combine with noon time
+            date_datetime = datetime.combine(date_obj, time(12, 0))
+        else:
+            date_datetime = timezone.now()
+
         PendingPaymentTransaction.objects.create(
             client=client,
             amount=amount,
             type=type,
-            date=date,
+            date=date_datetime,
             notes=notes,
             created_by=request.user
         )
-        
+
         messages.success(request, f"Transaction recorded for {client.name}")
         return redirect('pending_payments_list')
     
     clients = Client.objects.filter(user=request.user).order_by('name')
+    selected_client_id = request.GET.get('client')
+    selected_type = request.GET.get('type')
+
+    # Get selected client details if any
+    selected_client = None
+    client_exchanges = []
+    if selected_client_id:
+        try:
+            selected_client = Client.objects.get(pk=int(selected_client_id), user=request.user)
+            client_exchanges = selected_client.exchange_accounts.select_related('exchange').all()
+        except (ValueError, Client.DoesNotExist):
+            selected_client = None
+
     return render(request, 'core/pending_payments/form.html', {
         'clients': clients,
-        'today': timezone.now().strftime('%Y-%m-%dT%H:%M'),
+        'selected_client_id': int(selected_client_id) if selected_client_id else None,
+        'selected_client': selected_client,
+        'client_exchanges': client_exchanges,
+        'selected_type': selected_type,
+        'today': timezone.now().strftime('%Y-%m-%d'),
     })
 
 @login_required

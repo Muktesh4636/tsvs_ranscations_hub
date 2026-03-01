@@ -190,22 +190,22 @@ document.addEventListener('keydown', function(e) {
         <tbody>
         {% for client in clients %}
             <tr>
-                <td onclick="window.location='{% url 'client_detail' client.pk %}'" style="cursor:pointer;">{% if client.code %}{{ client.code }}{% else %}<span style="color: var(--muted);">—</span>{% endif %}</td>
-                <td onclick="window.location='{% url 'client_detail' client.pk %}'" style="cursor:pointer;">{{ client.name }}</td>
-                <td onclick="window.location='{% url 'client_detail' client.pk %}'" style="cursor:pointer;">
+                <td onclick="window.location='{% if request.resolver_match.url_name == 'payments_client_list' %}{% url 'payments_client_detail' client.pk %}{% else %}{% url 'client_detail' client.pk %}{% endif %}'" style="cursor:pointer;">{% if client.code %}{{ client.code }}{% else %}<span style="color: var(--muted);">—</span>{% endif %}</td>
+                <td onclick="window.location='{% if request.resolver_match.url_name == 'payments_client_list' %}{% url 'payments_client_detail' client.pk %}{% else %}{% url 'client_detail' client.pk %}{% endif %}'" style="cursor:pointer;">{{ client.name }}</td>
+                <td onclick="window.location='{% if request.resolver_match.url_name == 'payments_client_list' %}{% url 'payments_client_detail' client.pk %}{% else %}{% url 'client_detail' client.pk %}{% endif %}'" style="cursor:pointer;">
                     {% if client.is_company_client %}
                         <span class="badge" style="background: #dbeafe; color: #1e40af;">Company</span>
                     {% else %}
                         <span class="badge" style="background: #f3e8ff; color: #7c3aed;">My Client</span>
                     {% endif %}
                 </td>
-                <td onclick="window.location='{% url 'client_detail' client.pk %}'" style="cursor:pointer;">
+                <td onclick="window.location='{% if request.resolver_match.url_name == 'payments_client_list' %}{% url 'payments_client_detail' client.pk %}{% else %}{% url 'client_detail' client.pk %}{% endif %}'" style="cursor:pointer;">
                     <span class="badge badge-success">Active</span>
                 </td>
-                <td onclick="window.location='{% url 'client_detail' client.pk %}'" style="cursor:pointer;">{{ client.exchange_accounts.count }}</td>
+                <td onclick="window.location='{% if request.resolver_match.url_name == 'payments_client_list' %}{% url 'payments_client_detail' client.pk %}{% else %}{% url 'client_detail' client.pk %}{% endif %}'" style="cursor:pointer;">{{ client.exchange_accounts.count }}</td>
                 <td onclick="event.stopPropagation();" style="cursor:default;">
                     <div style="display: flex; gap: 8px;">
-                        <a href="{% url 'client_detail' client.pk %}" class="btn btn-sm">View</a>
+                        <a href="{% if request.resolver_match.url_name == 'payments_client_list' %}{% url 'payments_client_detail' client.pk %}{% else %}{% url 'client_detail' client.pk %}{% endif %}" class="btn btn-sm">View</a>
                         <form method="post" action="{% url 'client_delete' client.pk %}" style="display: inline;" onsubmit="return confirm('Are you sure you want to permanently delete client \"{{ client.name }}\"? This action cannot be undone and will delete all associated exchange accounts and transactions.');">
                             {% csrf_token %}
                             <button type="submit" class="btn btn-sm" style="background: #fee2e2; color: #991b1b; border: 1px solid #dc2626;">Delete</button>

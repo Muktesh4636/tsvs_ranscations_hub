@@ -53,7 +53,7 @@
     </table>
     
     <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border);">
-        <a href="{% url 'exchange_account_detail' transaction.client_exchange.pk %}" class="btn btn-primary">View Account</a>
+        <a href="{% if request.resolver_match.url_name == 'payments_dashboard' %}{% url 'payments_exchange_account_detail' transaction.client_exchange.pk %}{% else %}{% url 'exchange_account_detail' transaction.client_exchange.pk %}{% endif %}" class="btn btn-primary">View Account</a>
         <a href="{% url 'transaction_list' %}" class="btn" style="margin-left: 8px;">Back to Transactions</a>
     </div>
 </div>

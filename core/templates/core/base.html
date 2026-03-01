@@ -257,6 +257,14 @@
             color: #a5f3fc;
         }
 
+        .sidebar-section {
+            display: none;
+        }
+
+        .sidebar-section.active {
+            display: block;
+        }
+
         .main {
             flex: 1;
             margin-left: 230px;
@@ -276,7 +284,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
         }
 
         .page-title {
@@ -451,6 +459,16 @@
             background: #0f766e;
         }
 
+        .btn-outline {
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text);
+        }
+
+        .btn-outline:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
         .btn-sm {
             padding: 6px 14px;
             border-radius: 999px;
@@ -504,6 +522,38 @@
         function toggleSidebar() {
             document.body.classList.toggle('sidebar-collapsed');
         }
+
+        function switchSidebarView(view) {
+            const clientsSection = document.getElementById('clients-section');
+            const paymentsSection = document.getElementById('payments-section');
+            const selector = document.getElementById('sidebar-view-selector');
+
+            if (view === 'payments') {
+                clientsSection.classList.remove('active');
+                paymentsSection.classList.add('active');
+                selector.value = 'payments';
+            } else {
+                paymentsSection.classList.remove('active');
+                clientsSection.classList.add('active');
+                selector.value = 'clients';
+            }
+            
+            // Save preference
+            localStorage.setItem('sidebar-view', view);
+        }
+
+        // Initialize sidebar view on load
+        document.addEventListener('DOMContentLoaded', function() {
+            const savedView = localStorage.getItem('sidebar-view') || 'clients';
+            
+            // Check if we are currently on a payment page - if so, force payment view
+            const currentPath = window.location.pathname;
+            if (currentPath.includes('/client-payments/') || currentPath.includes('/pending-payments/') || currentPath.includes('/client_payment/')) {
+                switchSidebarView('payments');
+            } else {
+                switchSidebarView(savedView);
+            }
+        });
 
         // Currency formatting functions - Indian numbering system
         // Indian numbering: last 3 digits, then groups of 2 digits
@@ -588,56 +638,90 @@
             </div>
         </div>
 
+        <div class="nav-dropdown">
+            <select id="sidebar-view-selector" onchange="switchSidebarView(this.value)">
+                <option value="clients">Clients</option>
+                <option value="payments">Client Payments</option>
+            </select>
+        </div>
 
-        <div class="nav-section-label">Main</div>
-        <ul class="nav">
-            <li class="nav-item">
-                <a href="{% url 'dashboard' %}" id="nav-dashboard-link" class="nav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
-                    <span class="nav-icon">🏠</span>
-                    <span>Dashboard</span>
-                </a>
-            </li>
-            <li class="nav-item" id="nav-my-clients">
-                <a href="{% url 'client_list' %}" class="nav-link {% if request.resolver_match.url_name == 'client_list' or request.resolver_match.url_name == 'client_detail' or request.resolver_match.url_name == 'client_create' %}active{% endif %}">
-                    <span class="nav-icon">👤</span>
-                    <span>Clients</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a href="{% url 'exchange_list' %}" id="nav-exchanges-link" class="nav-link {% if request.resolver_match.url_name == 'exchange_list' or request.resolver_match.url_name == 'exchange_create' or request.resolver_match.url_name == 'exchange_link' or request.resolver_match.url_name == 'exchange_account_detail' %}active{% endif %}">
-                    <span class="nav-icon">🏦</span>
-                    <span>Exchanges</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a href="{% url 'transaction_list' %}" id="nav-transactions-link" class="nav-link {% if request.resolver_match.url_name == 'transaction_list' or request.resolver_match.url_name == 'transaction_detail' %}active{% endif %}">
-                    <span class="nav-icon">💸</span>
-                    <span>Transactions</span>
-                </a>
-            </li>
-        </ul>
+        <div id="clients-section" class="sidebar-section">
+            <div class="nav-section-label">Clients</div>
+            <ul class="nav">
+                <li class="nav-item">
+                    <a href="{% url 'dashboard' %}" id="nav-dashboard-link" class="nav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
+                        <span class="nav-icon">🏠</span>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li class="nav-item" id="nav-my-clients">
+                    <a href="{% url 'client_list' %}" class="nav-link {% if request.resolver_match.url_name == 'client_list' or request.resolver_match.url_name == 'client_detail' or request.resolver_match.url_name == 'client_create' %}active{% endif %}">
+                        <span class="nav-icon">👤</span>
+                        <span>Clients</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{% url 'exchange_list' %}" id="nav-exchanges-link" class="nav-link {% if request.resolver_match.url_name == 'exchange_list' or request.resolver_match.url_name == 'exchange_create' or request.resolver_match.url_name == 'exchange_link' or request.resolver_match.url_name == 'exchange_account_detail' %}active{% endif %}">
+                        <span class="nav-icon">🏦</span>
+                        <span>Exchanges</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{% url 'transaction_list' %}" id="nav-transactions-link" class="nav-link {% if request.resolver_match.url_name == 'transaction_list' or request.resolver_match.url_name == 'transaction_detail' or request.resolver_match.url_name == 'pending_payment_create' or request.resolver_match.url_name == 'pending_payment_edit' %}active{% endif %}">
+                        <span class="nav-icon">💸</span>
+                        <span>Transactions</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{% url 'pending_summary' %}" id="nav-pending-link" class="nav-link {% if request.resolver_match.url_name == 'pending_summary' %}active{% endif %}">
+                        <span class="nav-icon">↔️</span>
+                        <span>Settlements</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{% url 'report_overview' %}" id="nav-reports-link" class="nav-link {% if request.resolver_match.url_name == 'report_overview' %}active{% endif %}">
+                        <span class="nav-icon">📊</span>
+                        <span>Reports</span>
+                    </a>
+                </li>
+            </ul>
+        </div>
 
-        <div class="nav-section-label">Money Movement</div>
-        <ul class="nav">
-            <li class="nav-item">
-                <a href="{% url 'pending_payments_list' %}" class="nav-link {% if request.resolver_match.url_name == 'pending_payments_list' or request.resolver_match.url_name == 'pending_payment_create' or request.resolver_match.url_name == 'pending_payment_edit' %}active{% endif %}">
-                    <span class="nav-icon">💸</span>
-                    <span>Pending Payments</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a href="{% url 'pending_summary' %}" id="nav-pending-link" class="nav-link {% if request.resolver_match.url_name == 'pending_summary' %}active{% endif %}">
-                    <span class="nav-icon">↔️</span>
-                    <span>Settlements</span>
-                </a>
-            </li>
-            <li class="nav-item">
-                <a href="{% url 'report_overview' %}" id="nav-reports-link" class="nav-link {% if request.resolver_match.url_name == 'report_overview' %}active{% endif %}">
-                    <span class="nav-icon">📊</span>
-                    <span>Reports</span>
-                </a>
-            </li>
-        </ul>
+        <div id="payments-section" class="sidebar-section">
+            <div class="nav-section-label">Client Payments</div>
+            <ul class="nav">
+                <li class="nav-item">
+                    <a href="{% url 'payments_dashboard' %}" class="nav-link {% if request.resolver_match.url_name == 'payments_dashboard' %}active{% endif %}">
+                        <span class="nav-icon">🏠</span>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{% url 'payments_client_list' %}" class="nav-link {% if request.resolver_match.url_name == 'payments_client_list' %}active{% endif %}">
+                        <span class="nav-icon">👤</span>
+                        <span>Clients</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{% url 'payments_transaction_list' %}" class="nav-link {% if request.resolver_match.url_name == 'payments_transaction_list' or request.resolver_match.url_name == 'payments_client_detail' or request.resolver_match.url_name == 'payments_exchange_account_detail' or request.resolver_match.url_name == 'pending_payment_create' or request.resolver_match.url_name == 'pending_payment_edit' %}active{% endif %}">
+                        <span class="nav-icon">💸</span>
+                        <span>Transactions</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{% url 'payments_pending_payments_list' %}" class="nav-link {% if request.resolver_match.url_name == 'payments_pending_payments_list' %}active{% endif %}">
+                        <span class="nav-icon">💸</span>
+                        <span>Pending Payments</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="{% url 'payments_report_overview' %}" class="nav-link {% if request.resolver_match.url_name == 'payments_report_overview' %}active{% endif %}">
+                        <span class="nav-icon">📊</span>
+                        <span>Reports</span>
+                    </a>
+                </li>
+            </ul>
+        </div>
 
         <div class="nav-section-label">System</div>
         <ul class="nav">
@@ -649,6 +733,12 @@
                 </a>
             </li>
             {% endif %}
+            <li class="nav-item">
+                <a href="{% url 'build_apk' %}" class="nav-link" onclick="return confirm('This will build the APK using Gradle. This may take 1-2 minutes. Continue?');">
+                    <span class="nav-icon">🔨</span>
+                    <span>Build APK</span>
+                </a>
+            </li>
             <li class="nav-item">
                 <a href="{% url 'download_apk' %}" class="nav-link" download="chip_trading_app.apk">
                     <span class="nav-icon">📱</span>
@@ -665,7 +755,6 @@
                     <span>Logout</span>
                 </a>
             </li>
-        </ul>
         </ul>
 
         <div class="sidebar-footer">

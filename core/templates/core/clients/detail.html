@@ -2,13 +2,15 @@
 {% load math_filters %}
 
 {% block title %}Client · {{ client.name }}{% endblock %}
-{% block page_title %}{{ client.name }}{% endblock %}
+{% block page_title %}{{ client.name }}{% if client.code %} ({{ client.code }}){% endif %}{% endblock %}
 {% block page_subtitle %}{% if client.code %}Code: {{ client.code }} · {% endif %}Exchanges and account details{% endblock %}
 
 {% block page_actions %}
 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-    <a href="{% url 'exchange_link' %}?client={{ client.pk }}" class="btn btn-primary">Link Exchange</a>
-    <a href="{% url 'client_list' %}" class="btn">Back to Clients</a>
+    {% if request.resolver_match.url_name != 'payments_client_detail' %}
+        <a href="{% url 'exchange_link' %}?client={{ client.pk }}" class="btn btn-primary">Link Exchange</a>
+    {% endif %}
+    <a href="{% if request.resolver_match.url_name == 'payments_client_detail' %}{% url 'payments_client_list' %}{% else %}{% url 'client_list' %}{% endif %}" class="btn">Back to Clients</a>
 </div>
 {% endblock %}
 
@@ -63,6 +65,7 @@
             <thead>
             <tr>
                 <th>Exchange</th>
+                <th>Version</th>
                 <th>Funding</th>
                 <th>Exchange Balance</th>
                 <th>Client PnL</th>
@@ -76,10 +79,11 @@
                 {% with pnl=account.compute_client_pnl share=account.compute_my_share %}
                 <tr>
                     <td>
-                        <a href="{% url 'exchange_account_detail' account.pk %}" style="color: var(--accent); text-decoration: none; font-weight: 500;">
+                        <a href="{% if request.resolver_match.url_name == 'payments_client_detail' %}{% url 'payments_exchange_account_detail' account.pk %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" style="color: var(--accent); text-decoration: none; font-weight: 500;">
                             {{ account.exchange.name }}{% if account.exchange.code %} ({{ account.exchange.code }}){% endif %}
                         </a>
                     </td>
+                    <td>{{ account.exchange.version_name|default:"—" }}</td>
                     <td>{{ account.funding|currency_inr }}</td>
                     <td>{{ account.exchange_balance|currency_inr }}</td>
                     <td>
@@ -99,9 +103,9 @@
                         {% endif %}
                     </td>
                     <td>{{ account.my_percentage }}%</td>
-                    <td>
-                        <a href="{% url 'exchange_account_detail' account.pk %}" class="btn btn-sm">View</a>
-                    </td>
+                        <td>
+                            <a href="{% if request.resolver_match.url_name == 'payments_client_detail' %}{% url 'payments_exchange_account_detail' account.pk %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" class="btn btn-sm">View</a>
+                        </td>
                 </tr>
                 {% endwith %}
             {% endfor %}
@@ -112,8 +116,16 @@
 {% else %}
 <div style="background: var(--bg-content); border-radius: 8px; padding: 40px; border: 1px solid var(--border); text-align: center; color: var(--muted);">
     <div style="font-size: 16px; margin-bottom: 8px;">No Exchange Accounts</div>
-    <div style="font-size: 14px; margin-bottom: 16px;">Link an exchange to get started</div>
-    <a href="{% url 'exchange_link' %}?client={{ client.pk }}" class="btn btn-primary">Link Exchange</a>
+    <div style="font-size: 14px; margin-bottom: 16px;">
+        {% if request.resolver_match.url_name == 'payments_client_detail' %}
+            This client has no exchange accounts configured.
+        {% else %}
+            Link an exchange to get started
+        {% endif %}
+    </div>
+    {% if request.resolver_match.url_name != 'payments_client_detail' %}
+        <a href="{% url 'exchange_link' %}?client={{ client.pk }}" class="btn btn-primary">Link Exchange</a>
+    {% endif %}
 </div>
 {% endif %}
 {% endblock %}
