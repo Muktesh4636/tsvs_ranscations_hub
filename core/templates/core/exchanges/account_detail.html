@@ -155,35 +155,37 @@
             </div>
         </div>
         <div class="card">
-            <div class="card-title">Final Share</div>
+            <div class="card-title">My Share</div>
             <div class="card-value">
-                {% if share == 0 %}
+                {% if display_final_share == 0 %}
                     <span style="color: var(--muted);">N.A (Zero Share)</span>
                 {% else %}
-                    {{ share|currency_inr }}
+                    {{ display_final_share|currency_inr }}
                 {% endif %}
             </div>
         </div>
         <div class="card">
             <div class="card-title">Remaining Settlement</div>
             <div class="card-value">
-                {% if share == 0 %}
+                {% if display_final_share == 0 %}
                     <span style="color: var(--muted);">N.A</span>
                 {% else %}
-                    <strong style="color: var(--accent);">{{ remaining.remaining|currency_inr }}</strong>
+                    <strong style="color: var(--accent);">{{ display_remaining_settlement_amount|currency_inr }}</strong>
                 {% endif %}
             </div>
         </div>
         <div class="card">
             <div class="card-title">Share Percentage</div>
             <div class="card-value">
-                {% if pnl < 0 %}
-                    {{ account.loss_share_percentage|default:account.my_percentage|floatformat:2 }}% (Loss)
-                {% elif pnl > 0 %}
-                    {{ account.profit_share_percentage|default:account.my_percentage|floatformat:2 }}% (Profit)
-                {% else %}
-                    {{ account.my_percentage|floatformat:2 }}%
-        {% endif %}
+                {{ display_share_percentage|floatformat:2 }}%
+                {% if account.my_own_percentage and account.my_own_percentage > 0 %}
+                    <span style="color: var(--muted); font-size: 12px;">(My Own %)</span>
+                {% endif %}
+            {% if pnl < 0 %}
+                <span style="color: var(--muted); font-size: 12px;">(Loss)</span>
+            {% elif pnl > 0 %}
+                <span style="color: var(--muted); font-size: 12px;">(Profit)</span>
+            {% endif %}
     </div>
 </div>
 {% endif %}

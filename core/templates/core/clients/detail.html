@@ -31,6 +31,7 @@
         <div class="card-title">Linked Exchanges</div>
         <div class="card-value">{{ accounts|length }}</div>
     </div>
+    {% if request.resolver_match.url_name != 'payments_client_detail' %}
     <div class="card">
         <div class="card-title">Total Funding</div>
         <div class="card-value">{{ total_funding|currency_inr }}</div>
@@ -39,6 +40,7 @@
         <div class="card-title">Total Exchange Balance</div>
         <div class="card-value">{{ total_exchange_balance|currency_inr }}</div>
     </div>
+    {% endif %}
     {% if request.resolver_match.url_name == 'payments_client_detail' %}
     <div class="card">
         <div class="card-title">Pending payment</div>
@@ -148,10 +150,20 @@
                         {% if pnl == 0 %}
                             <span style="color: var(--muted);">N.A</span>
                         {% else %}
-                            {{ share|currency_inr }}
+                            {% if request.resolver_match.url_name == 'payments_client_detail' %}
+                                {{ account.display_my_share|default:0|currency_inr }}
+                            {% else %}
+                                {{ share|currency_inr }}
+                            {% endif %}
                         {% endif %}
                     </td>
-                    <td>{{ account.my_percentage }}%</td>
+                    <td>
+                        {% if request.resolver_match.url_name == 'payments_client_detail' %}
+                            {{ account.display_my_pct|default:account.my_percentage|floatformat:2 }}%
+                        {% else %}
+                            {{ account.my_percentage|floatformat:2 }}%
+                        {% endif %}
+                    </td>
                         <td>
                             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                                 <a href="{% if request.resolver_match.url_name == 'payments_client_detail' %}{% url 'payments_exchange_account_detail' account.pk account.exchange.get_slug %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" class="btn btn-sm">View</a>
