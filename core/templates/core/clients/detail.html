@@ -39,13 +39,62 @@
         <div class="card-title">Total Exchange Balance</div>
         <div class="card-value">{{ total_exchange_balance|currency_inr }}</div>
     </div>
+    {% if request.resolver_match.url_name == 'payments_client_detail' %}
+    <div class="card">
+        <div class="card-title">Pending payment</div>
+        <div class="card-value {% if client.pending_balance > 0 %}positive{% elif client.pending_balance < 0 %}negative{% endif %}">
+            {{ client.pending_balance|abs|currency_inr }}
+        </div>
+        <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--muted);">
+            {% if client.pending_balance > 0 %}Client owes me{% elif client.pending_balance < 0 %}I owe client{% else %}Settled{% endif %}
+        </div>
+    </div>
+    {% elif request.resolver_match.url_name != 'payments_client_detail' %}
     <div class="card">
         <div class="card-title">Total Client PnL</div>
         <div class="card-value {% if total_client_pnl > 0 %}positive{% elif total_client_pnl < 0 %}negative{% endif %}">
             {{ total_client_pnl|currency_inr }}
         </div>
     </div>
+    {% endif %}
 </div>
+
+{% if request.resolver_match.url_name == 'payments_client_detail' %}
+<!-- Settlement summary: who owes whom per exchange -->
+<div style="background: var(--bg-content); border-radius: 8px; padding: 20px; border: 1px solid var(--border); margin-bottom: 24px;">
+    <h3 style="font-size: 16px; font-weight: 600; margin: 0 0 16px 0;">Settlement by exchange</h3>
+    <p style="font-size: 13px; color: var(--muted); margin-bottom: 16px;">Remaining amount to settle per exchange — who needs to pay whom.</p>
+    {% if total_i_owe_client > 0 or total_client_owes_me > 0 %}
+    <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border);">
+        {% if total_i_owe_client > 0 %}
+        <div><span style="font-size: 13px; color: var(--muted);">Total I need to pay this client:</span> <strong style="color: var(--danger); font-size: 18px;">{{ total_i_owe_client|currency_inr }}</strong></div>
+        {% endif %}
+        {% if total_client_owes_me > 0 %}
+        <div><span style="font-size: 13px; color: var(--muted);">Total client needs to pay me:</span> <strong style="color: var(--success); font-size: 18px;">{{ total_client_owes_me|currency_inr }}</strong></div>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% if exchange_settlements %}
+    <ul style="list-style: none; padding: 0; margin: 0;">
+        {% for item in exchange_settlements %}
+        <li style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap;">
+            <span style="font-weight: 600;">{{ item.exchange_label }}</span>
+            <span style="display: flex; align-items: center; gap: 8px;">
+                {% if item.client_owes_me %}
+                <span style="color: var(--success); font-weight: 500;">Client needs to pay me {{ item.remaining|currency_inr }}</span>
+                {% else %}
+                <span style="color: var(--danger); font-weight: 500;">I need to pay client {{ item.remaining|currency_inr }}</span>
+                {% endif %}
+                <a href="{% url 'payments_exchange_account_detail' item.account.pk item.account.exchange.get_slug %}" class="btn btn-sm" style="font-size: 12px;">View account</a>
+            </span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p style="font-size: 13px; color: var(--muted); margin: 0;">No pending settlement for any exchange.</p>
+    {% endif %}
+</div>
+{% endif %}
 
 {% if client.referred_by %}
 <div style="background: var(--bg-content); border-radius: 8px; padding: 16px; border: 1px solid var(--border); margin-bottom: 24px;">
@@ -79,7 +128,7 @@
                 {% with pnl=account.compute_client_pnl share=account.compute_my_share %}
                 <tr>
                     <td>
-                        <a href="{% if request.resolver_match.url_name == 'payments_client_detail' %}{% url 'payments_exchange_account_detail' account.pk %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" style="color: var(--accent); text-decoration: none; font-weight: 500;">
+                        <a href="{% if request.resolver_match.url_name == 'payments_client_detail' %}{% url 'payments_exchange_account_detail' account.pk account.exchange.get_slug %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" style="color: var(--accent); text-decoration: none; font-weight: 500;">
                             {{ account.exchange.name }}{% if account.exchange.code %} ({{ account.exchange.code }}){% endif %}
                         </a>
                     </td>
@@ -104,7 +153,18 @@
                     </td>
                     <td>{{ account.my_percentage }}%</td>
                         <td>
-                            <a href="{% if request.resolver_match.url_name == 'payments_client_detail' %}{% url 'payments_exchange_account_detail' account.pk %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" class="btn btn-sm">View</a>
+                            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                <a href="{% if request.resolver_match.url_name == 'payments_client_detail' %}{% url 'payments_exchange_account_detail' account.pk account.exchange.get_slug %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" class="btn btn-sm">View</a>
+                                {% if request.resolver_match.url_name != 'payments_client_detail' %}
+                                <form method="post" action="{% url 'client_exchange_delete' account.pk %}" style="display: inline;" onsubmit="return confirm('Delete this exchange account? This will permanently delete ALL transactions/settlements for this account.');">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="next" value="{{ request.get_full_path }}" />
+                                    <button type="submit" class="btn btn-sm" style="color: var(--danger); border-color: var(--danger);">
+                                        Delete
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </div>
                         </td>
                 </tr>
                 {% endwith %}

@@ -80,10 +80,16 @@ urlpatterns = [
     path('client_payment/exchanges/', views.exchange_list),  # Alias for typo
     path('exchanges/create/', views.exchange_create, name='exchange_create'),
     path('exchanges/link/', views.link_client_to_exchange, name='exchange_link'),
-    path('clients/exchanges/account/<int:pk>/', views.exchange_account_detail, name='exchange_account_detail'),
-    path('client-payments/exchanges/account/<int:pk>/', views.exchange_account_detail, name='payments_exchange_account_detail'),
+    # Canonical client account URL includes exchange slug (dafa/diamond/etc)
+    path('clients/exchanges/account/<int:pk>/<slug:exchange_slug>/', views.exchange_account_detail, name='exchange_account_detail_with_slug'),
+    # Back-compat: redirect old URL to slugged URL
+    path('clients/exchanges/account/<int:pk>/', views.exchange_account_detail_redirect_with_slug_clients, name='exchange_account_detail'),
+    path('client-payments/exchanges/account/<int:pk>/<slug:exchange_slug>/', views.exchange_account_detail, name='payments_exchange_account_detail'),
+    path('client-payments/exchanges/account/<int:pk>/<slug:exchange_slug>/settlement/', views.pending_payment_settlement, name='pending_payment_settlement'),
+    path('client-payments/exchanges/account/<int:pk>/', views.exchange_account_detail_redirect_with_slug, name='payments_exchange_account_detail_redirect'),
     path('exchanges/account/<int:pk>/', views.exchange_account_detail),  # Alias for backward compatibility
     path('exchanges/account/<int:pk>/edit/', views.client_exchange_edit, name='client_exchange_edit'),
+    path('exchanges/account/<int:pk>/delete/', views.client_exchange_delete, name='client_exchange_delete'),
     
     # Funding & Transactions
     path('exchanges/account/<int:account_id>/funding/', views.add_funding, name='add_funding'),
@@ -98,6 +104,7 @@ urlpatterns = [
     
     # Settlements
     path('clients/settlements/', views.pending_summary, name='pending_summary'),
+    path('clients/settlements/settle-all/', views.settle_all_payments, name='settle_all_payments'),
     path('client-payments/settlements/', views.pending_payments_list, name='payments_settlements_list'),
     path('client_payment/settlements/', views.pending_payments_list),  # Alias for typo
     path('pending/export/', views.export_pending_csv, name='export_pending_csv'),
@@ -126,7 +133,6 @@ urlpatterns = [
     path('client_payment/pending-payments/', views.pending_payments_list),  # Alias for typo
     path('pending-payments/', views.pending_payments_list, name='pending_payments_list'),
     path('pending-payments/transactions/', views.pending_payment_transactions_list, name='pending_payment_transactions_list'),
-    path('pending-payments/add/', views.pending_payment_create, name='pending_payment_create'),
     path('pending-payments/<int:pk>/edit/', views.pending_payment_edit, name='pending_payment_edit'),
     path('pending-payments/<int:pk>/delete/', views.pending_payment_delete, name='pending_payment_delete'),
     

@@ -348,29 +348,75 @@
 
 <!-- Summary Stats -->
 <div class="stats-grid">
+    {% if profit_basis == 'cashflow_ledger' %}
         <div class="stat-box turnover">
-        <div class="stat-label">Total Turnover</div>
-        <div class="stat-value">{{ total_turnover|default:0|currency_inr }}</div>
-        <div class="stat-note">All-time transaction volume</div>
-    </div>
-        <div class="stat-box profit">
-        <div class="stat-label">Your Total Profit</div>
-        <div class="stat-value {% if your_total_profit >= 0 %}positive{% else %}negative{% endif %}">{{ your_total_profit|default:0|currency_inr }}</div>
-        <div class="stat-note">
-            Cash-flow based: Money received from clients ({{ your_total_income_from_clients|default:0|currency_inr }}) 
-            - Money paid to clients ({{ your_total_paid_to_clients|default:0|currency_inr }})
+            <div class="stat-label">Net Pending</div>
+            <div class="stat-value {% if net_pending >= 0 %}positive{% else %}negative{% endif %}">{{ net_pending|default:0|currency_inr }}</div>
+            <div class="stat-note">Matches Pending Payments: receivable ({{ pending_receivable|default:0|currency_inr }}) − payable ({{ pending_payable|default:0|currency_inr }})</div>
         </div>
-    </div>
-    <div class="stat-box profit">
-        <div class="stat-label">My Profit</div>
-        <div class="stat-value {% if my_profit >= 0 %}positive{% else %}negative{% endif %}">{{ my_profit|default:0|currency_inr_decimal }}</div>
-        <div class="stat-note">Your share from settlements (split from ClientExchangeReportConfig)</div>
-    </div>
-    <div class="stat-box profit">
-        <div class="stat-label">Company Profit</div>
-        <div class="stat-value {% if friend_profit >= 0 %}positive{% else %}negative{% endif %}">{{ friend_profit|default:0|currency_inr_decimal }}</div>
-        <div class="stat-note">Company share from settlements (split from ClientExchangeReportConfig)</div>
-    </div>
+        <div class="stat-box profit">
+            <div class="stat-label">Net Profit</div>
+            <div class="stat-value {% if your_total_profit >= 0 %}positive{% else %}negative{% endif %}">{{ your_total_profit|default:0|currency_inr }}</div>
+            <div class="stat-note">Received ({{ your_total_income_from_clients|default:0|currency_inr }}) − Paid ({{ your_total_paid_to_clients|default:0|currency_inr }})</div>
+        </div>
+        <div class="stat-box profit">
+            <div class="stat-label">Received</div>
+            <div class="stat-value positive">{{ your_total_income_from_clients|default:0|currency_inr }}</div>
+            <div class="stat-note">Money you received from clients</div>
+        </div>
+        <div class="stat-box loss">
+            <div class="stat-label">Paid</div>
+            <div class="stat-value negative">{{ your_total_paid_to_clients|default:0|currency_inr }}</div>
+            <div class="stat-note">Money you paid to clients</div>
+        </div>
+    {% else %}
+        <div class="stat-box turnover">
+            <div class="stat-label">Total Turnover</div>
+            <div class="stat-value">{{ total_turnover|default:0|currency_inr }}</div>
+            <div class="stat-note">All-time transaction volume</div>
+        </div>
+        <div class="stat-box profit">
+            <div class="stat-label">
+                {% if profit_basis == 'pnl' %}
+                    Your Share (PnL Snapshot)
+                {% else %}
+                    Your Total Profit
+                {% endif %}
+            </div>
+            <div class="stat-value {% if your_total_profit >= 0 %}positive{% else %}negative{% endif %}">{{ your_total_profit|default:0|currency_inr }}</div>
+            <div class="stat-note">
+                {% if profit_basis == 'pnl' %}
+                    PnL-based: share receivable from clients ({{ your_total_income_from_clients|default:0|currency_inr }})
+                    - share payable to clients ({{ your_total_paid_to_clients|default:0|currency_inr }})
+                {% else %}
+                    Cash-flow based: Money received from clients ({{ your_total_income_from_clients|default:0|currency_inr }})
+                    - Money paid to clients ({{ your_total_paid_to_clients|default:0|currency_inr }})
+                {% endif %}
+            </div>
+        </div>
+        <div class="stat-box profit">
+            <div class="stat-label">My Profit</div>
+            <div class="stat-value {% if my_profit >= 0 %}positive{% else %}negative{% endif %}">{{ my_profit|default:0|currency_inr_decimal }}</div>
+            <div class="stat-note">
+                {% if profit_basis == 'pnl' %}
+                    Split from PnL snapshot (ClientExchangeReportConfig)
+                {% else %}
+                    Your share from settlements (split from ClientExchangeReportConfig)
+                {% endif %}
+            </div>
+        </div>
+        <div class="stat-box profit">
+            <div class="stat-label">Company Profit</div>
+            <div class="stat-value {% if friend_profit >= 0 %}positive{% else %}negative{% endif %}">{{ friend_profit|default:0|currency_inr_decimal }}</div>
+            <div class="stat-note">
+                {% if profit_basis == 'pnl' %}
+                    Split from PnL snapshot (ClientExchangeReportConfig)
+                {% else %}
+                    Company share from settlements (split from ClientExchangeReportConfig)
+                {% endif %}
+            </div>
+        </div>
+    {% endif %}
 </div>
 
 {% if report_type == 'daily' %}

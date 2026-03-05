@@ -31,6 +31,11 @@ class RateLimitMiddleware(MiddlewareMixin):
     """
     
     def process_request(self, request):
+        # In local development, rate limiting usually gets in the way (page loads, redirects, auto-refresh).
+        # Keep it enabled for production where DEBUG=False.
+        if getattr(settings, "DEBUG", False):
+            return None
+
         # Skip rate limiting for admin and static files
         if request.path.startswith('/admin/') or request.path.startswith('/static/'):
             return None

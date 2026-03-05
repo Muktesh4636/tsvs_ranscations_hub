@@ -523,7 +523,8 @@
             document.body.classList.toggle('sidebar-collapsed');
         }
 
-        function switchSidebarView(view) {
+        function switchSidebarView(view, navigate) {
+            navigate = !!navigate;
             const clientsSection = document.getElementById('clients-section');
             const paymentsSection = document.getElementById('payments-section');
             const selector = document.getElementById('sidebar-view-selector');
@@ -540,6 +541,22 @@
             
             // Save preference
             localStorage.setItem('sidebar-view', view);
+
+            // If user explicitly switches to Client Payments, open Pending Payments by default.
+            if (navigate && view === 'payments') {
+                const currentPath = window.location.pathname || '';
+                if (!currentPath.includes('/client-payments/pending-payments/')) {
+                    window.location.href = "{% url 'payments_pending_payments_list' %}";
+                }
+            }
+
+            // If user explicitly switches to Clients, open Clients list by default.
+            if (navigate && view === 'clients') {
+                const currentPath = window.location.pathname || '';
+                if (!currentPath.includes('/clients/list/')) {
+                    window.location.href = "{% url 'client_list' %}";
+                }
+            }
         }
 
         // Initialize sidebar view on load
@@ -549,9 +566,9 @@
             // Check if we are currently on a payment page - if so, force payment view
             const currentPath = window.location.pathname;
             if (currentPath.includes('/client-payments/') || currentPath.includes('/pending-payments/') || currentPath.includes('/client_payment/')) {
-                switchSidebarView('payments');
+                switchSidebarView('payments', false);
             } else {
-                switchSidebarView(savedView);
+                switchSidebarView(savedView, false);
             }
         });
 
@@ -639,7 +656,7 @@
         </div>
 
         <div class="nav-dropdown">
-            <select id="sidebar-view-selector" onchange="switchSidebarView(this.value)">
+            <select id="sidebar-view-selector" onchange="switchSidebarView(this.value, true)">
                 <option value="clients">Clients</option>
                 <option value="payments">Client Payments</option>
             </select>

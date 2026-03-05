@@ -34,7 +34,6 @@ from .models import (
     Exchange,
     ClientExchangeAccount,
     Transaction,
-    ClientExchangeReportConfig,
     Settlement,
     EmailOTP,
     MobileLog,
@@ -749,8 +748,8 @@ def dashboard(request):
     # Pending payments computed from accounts, not transactions
     pending_you_owe_clients = Decimal(0)  # Computed from accounts where Client_PnL > 0
 
-    # All clients
-    clients_qs = Client.objects.all()
+    # All clients (scoped to current user)
+    clients_qs = Client.objects.filter(user=request.user)
     
     # Active clients count
     active_clients_count = clients_qs.count()
@@ -855,17 +854,24 @@ def dashboard(request):
     is_payments_dashboard = request.resolver_match.url_name == 'payments_dashboard'
 
     if is_payments_dashboard:
-        # For payments dashboard: total amount clients paid to me - total amount I paid to clients
+        # For payments dashboard: show client-payments ledger metrics (cash + pending).
         from .models import PendingPaymentTransaction
-        total_my_share = Decimal(0)
-        payment_transactions = PendingPaymentTransaction.objects.filter(client__user=request.user)
-        for tx in payment_transactions:
-            if tx.type == 'RECEIVED':
-                # Clients paid to me - positive
-                total_my_share += tx.amount
-            elif tx.type == 'GIVEN':
-                # I paid to clients - negative
-                total_my_share -= tx.amount
+        payment_transactions = (
+            PendingPaymentTransaction.objects.filter(client__user=request.user)
+            .select_related("client", "client_exchange", "client_exchange__exchange")
+        )
+
+        total_received = sum(tx.amount for tx in payment_transactions if tx.type == "RECEIVED")
+        total_paid = sum(tx.amount for tx in payment_transactions if tx.type == "GIVEN")
+        net_profit = int(total_received) - int(total_paid)
+
+        all_clients_for_pending = Client.objects.filter(user=request.user)
+        pending_receivable = sum(c.pending_balance for c in all_clients_for_pending if c.pending_balance > 0)
+        pending_payable = abs(sum(c.pending_balance for c in all_clients_for_pending if c.pending_balance < 0))
+        net_pending = int(pending_receivable) - int(pending_payable)
+
+        total_my_share = net_profit
+        recent_payment_transactions = payment_transactions.order_by("-date", "-id")[:10]
     else:
         # FINANCIAL INTERPRETATION: Apply sign to Total My Share
         # - If client_pnl < 0 (LOSS): Client owes you → share is POSITIVE
@@ -881,6 +887,13 @@ def dashboard(request):
                 # PROFIT CASE: You owe client → share is NEGATIVE
                 total_my_share -= share_amount
             # If client_pnl == 0, share is 0, so no change
+        recent_payment_transactions = None
+        total_received = None
+        total_paid = None
+        net_profit = None
+        pending_receivable = None
+        pending_payable = None
+        net_pending = None
     
     # Count totals
     total_clients = Client.objects.filter(user=request.user).count()
@@ -899,6 +912,14 @@ def dashboard(request):
         "total_exchange_balance": total_exchange_balance,
         "total_client_pnl": total_client_pnl,
         "total_my_share": total_my_share,
+        # Payments dashboard metrics (only meaningful when payments_dashboard)
+        "payments_total_received": total_received,
+        "payments_total_paid": total_paid,
+        "payments_net_profit": net_profit,
+        "payments_pending_receivable": pending_receivable,
+        "payments_pending_payable": pending_payable,
+        "payments_net_pending": net_pending,
+        "recent_payment_transactions": recent_payment_transactions,
         "recent_accounts": recent_accounts,
         "total_turnover": total_turnover,
         "your_profit": your_profit,
@@ -1006,10 +1027,115 @@ def client_detail(request, pk):
     # Get all exchange accounts for this client
     accounts = client.exchange_accounts.select_related("exchange").all()
 
+    # Client-payments view: keep pending balances consistent and auto-seed dues when missing.
+    # This prevents stale client.pending_balance values (e.g. after deleting an account)
+    # and ensures a newly-loss/profit account surfaces a pending due even before running
+    # "Generate pending dues" from the settlements page.
+    if request.resolver_match and request.resolver_match.url_name == "payments_client_detail":
+        from .models import PendingPaymentTransaction
+        with db_transaction.atomic():
+            client = Client.objects.select_for_update().get(pk=client.pk, user=request.user)
+            accounts_locked = (
+                ClientExchangeAccount.objects.select_for_update()
+                .select_related("exchange")
+                .filter(client=client)
+                .all()
+            )
+
+            client_total = 0
+            for acc in accounts_locked:
+                # Rebuild account pending from source-of-truth:
+                # pending_balance = (sum of generated-dues markers) + (paid - received)
+                # IMPORTANT: ignore old auto-seeded markers; dues should be added ONLY via /clients/settlements/.
+                dues_signed = (
+                    Transaction.objects.filter(
+                        client_exchange=acc,
+                        type="RECORD_PAYMENT",
+                        notes__icontains="dues generated",
+                    )
+                    .exclude(notes__icontains="auto-seeded")
+                    .exclude(notes__icontains="seeded from settlement page")
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                paid = (
+                    PendingPaymentTransaction.objects.filter(client_exchange=acc, type="GIVEN")
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                received = (
+                    PendingPaymentTransaction.objects.filter(client_exchange=acc, type="RECEIVED")
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+
+                acc.pending_balance = int(dues_signed) + int(paid) - int(received)
+                acc.save(update_fields=["pending_balance"])
+                client_total += int(acc.pending_balance)
+
+            legacy_paid = (
+                PendingPaymentTransaction.objects.filter(
+                    client=client, client_exchange__isnull=True, type="GIVEN"
+                ).aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            legacy_received = (
+                PendingPaymentTransaction.objects.filter(
+                    client=client, client_exchange__isnull=True, type="RECEIVED"
+                ).aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            client_total += int(legacy_paid) - int(legacy_received)
+            client.pending_balance = int(client_total)
+            client.save(update_fields=["pending_balance"])
+
+        # Refresh querysets after potential updates
+        accounts = client.exchange_accounts.select_related("exchange").all()
+
     # Calculate totals
     total_funding = sum(account.funding for account in accounts)
     total_exchange_balance = sum(account.exchange_balance for account in accounts)
     total_client_pnl = sum(account.compute_client_pnl() for account in accounts)
+
+    # Per-exchange settlement summary (who owes whom, remaining amount)
+    exchange_settlements = []
+    if request.resolver_match and request.resolver_match.url_name == "payments_client_detail":
+        # Client-payments: drive from the per-account pending ledger (real cash settlements)
+        for account in accounts:
+            pending = int(account.pending_balance or 0)
+            if pending == 0:
+                continue
+            label = account.exchange.code or account.exchange.name
+            exchange_settlements.append({
+                "account": account,
+                "exchange_label": label,
+                "remaining": abs(pending),
+                "client_owes_me": pending > 0,
+            })
+    else:
+        # Trading settlements: drive from masked-share settlement tracker
+        for account in accounts:
+            pnl = account.compute_client_pnl()
+            account.lock_initial_share_if_needed()
+            info = account.get_remaining_settlement_amount()
+            remaining = info["remaining"]
+            if remaining <= 0:
+                continue
+            label = account.exchange.code or account.exchange.name
+            exchange_settlements.append({
+                "account": account,
+                "exchange_label": label,
+                "remaining": remaining,
+                "client_owes_me": pnl < 0,
+            })
+
+    # Totals for client-payments detail: how much client needs to pay you, and you need to pay client
+    total_client_owes_me = sum(
+        item["remaining"] for item in exchange_settlements if item["client_owes_me"]
+    )
+    total_i_owe_client = sum(
+        item["remaining"] for item in exchange_settlements if not item["client_owes_me"]
+    )
 
     transactions = (
         Transaction.objects.filter(client_exchange__client=client)
@@ -1026,6 +1152,9 @@ def client_detail(request, pk):
             "total_funding": total_funding,
             "total_exchange_balance": total_exchange_balance,
             "total_client_pnl": total_client_pnl,
+            "exchange_settlements": exchange_settlements,
+            "total_client_owes_me": total_client_owes_me,
+            "total_i_owe_client": total_i_owe_client,
             "transactions": transactions,
         },
     )
@@ -1781,6 +1910,11 @@ def pending_summary(request):
             # MASKED SHARE SETTLEMENT SYSTEM: Client MUST always appear in pending list
             # If FinalShare = 0, show N.A instead of filtering out
             show_na = (final_share == 0)
+
+            # Filter only truly settled rows (share exists but remaining is 0).
+            # If share is zero (N.A), keep it visible so the user understands why it’s missing otherwise.
+            if remaining_amount <= 0 and not show_na:
+                continue
             
             # Calculate values using MASKED SHARE formulas
             funding = Decimal(client_exchange.funding)
@@ -1826,6 +1960,11 @@ def pending_summary(request):
             # MASKED SHARE SETTLEMENT SYSTEM: Client MUST always appear in pending list
             # If FinalShare = 0, show N.A instead of filtering out
             show_na = (final_share == 0)
+
+            # Filter only truly settled rows (share exists but remaining is 0).
+            # If share is zero (N.A), keep it visible so the user understands why it’s missing otherwise.
+            if remaining_amount <= 0 and not show_na:
+                continue
             
             # Calculate values using MASKED SHARE formulas
             funding = Decimal(client_exchange.funding)
@@ -1906,6 +2045,246 @@ def pending_summary(request):
         "whatsapp_number": whatsapp_number,
     }
     return render(request, "core/pending/summary.html", context)
+
+
+@login_required
+@require_http_methods(["POST"])
+def settle_all_payments(request):
+    """
+    Generate pending dues in client-payments for all accounts.
+
+    NOTE:
+    This action does NOT represent a real cash payment. It only calculates how much
+    is due (your share) and reflects it into the pending ledger (`pending_balance`)
+    so real payments can be recorded later from client-payments screens.
+    """
+    from django.db import transaction
+    from django.core.exceptions import ValidationError
+    from django.contrib import messages
+    from .models import Settlement, PendingPaymentTransaction
+
+    def _recalculate_pending_for_client(client_id: int):
+        """
+        Rebuild pending balances from source-of-truth records.
+
+        account.pending_balance is derived as:
+          (sum of generated-dues markers) + (sum(GIVEN) - sum(RECEIVED))
+
+        client.pending_balance is the sum of all account.pending_balance plus any legacy
+        PendingPaymentTransaction rows without client_exchange.
+        """
+        from .models import Client, ClientExchangeAccount, PendingPaymentTransaction
+
+        client = Client.objects.select_for_update().get(pk=client_id, user=request.user)
+        accounts = ClientExchangeAccount.objects.select_for_update().filter(client=client)
+
+        client_total = 0
+        for acc in accounts:
+            dues_signed = (
+                Transaction.objects.filter(
+                    client_exchange=acc,
+                    type="RECORD_PAYMENT",
+                    notes__icontains="dues generated",
+                )
+                .exclude(notes__icontains="auto-seeded")
+                .exclude(notes__icontains="seeded from settlement page")
+                .aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            paid = (
+                PendingPaymentTransaction.objects.filter(client_exchange=acc, type="GIVEN")
+                .aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            received = (
+                PendingPaymentTransaction.objects.filter(client_exchange=acc, type="RECEIVED")
+                .aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            acc.pending_balance = int(dues_signed) + int(paid) - int(received)
+            acc.save(update_fields=["pending_balance"])
+            client_total += int(acc.pending_balance)
+
+        legacy_paid = (
+            PendingPaymentTransaction.objects.filter(client=client, client_exchange__isnull=True, type="GIVEN")
+            .aggregate(total=Sum("amount"))["total"]
+            or 0
+        )
+        legacy_received = (
+            PendingPaymentTransaction.objects.filter(client=client, client_exchange__isnull=True, type="RECEIVED")
+            .aggregate(total=Sum("amount"))["total"]
+            or 0
+        )
+        client_total += int(legacy_paid) - int(legacy_received)
+
+        client.pending_balance = int(client_total)
+        client.save(update_fields=["pending_balance"])
+
+    # Get all account IDs for this user
+    account_ids = list(
+        ClientExchangeAccount.objects.filter(client__user=request.user).values_list("pk", flat=True)
+    )
+    settled_count = 0
+    errors = []
+    touched_client_ids = set()
+
+    for account_id in account_ids:
+        try:
+            with transaction.atomic():
+                account = (
+                    ClientExchangeAccount.objects
+                    .select_for_update()
+                    .get(pk=account_id, client__user=request.user)
+                )
+                client_pnl_before = account.compute_client_pnl()
+
+                if client_pnl_before == 0:
+                    continue
+
+                account.lock_initial_share_if_needed()
+                # Full share due for THIS cycle (your share).
+                share_payment = int(account.compute_my_share() or 0)
+                if share_payment <= 0:
+                    continue
+
+                now = timezone.now()
+
+                # Remove old incorrect "Settle all payments" payment entries (not real cash).
+                PendingPaymentTransaction.objects.filter(
+                    client_exchange=account,
+                    notes__icontains="Settle all payments",
+                ).delete()
+
+                # 1) Add due into Client Payments pending ledger (ONLY ONCE per cycle)
+                # +pending_balance => client owes me, -pending_balance => I owe client
+                due_delta = share_payment if client_pnl_before < 0 else -share_payment
+                if due_delta != 0:
+                    account.pending_balance = int(account.pending_balance) + int(due_delta)
+                    account.save(update_fields=["pending_balance"])
+                    account.client.pending_balance = int(account.client.pending_balance) + int(due_delta)
+                    account.client.save(update_fields=["pending_balance"])
+
+                # 2) Internal settlement + auto-refunding (AUDIT)
+                # This clears the "remaining share" in the settlement tracker and writes audit transactions
+                # so they are visible on the exchange account page.
+                #
+                # IMPORTANT: still NOT a real cash payment. Real cash is recorded in client-payments.
+                funding_before = int(account.funding)
+                exchange_before = int(account.exchange_balance)
+
+                masked_capital = int(account.compute_masked_capital(share_payment) or 0)
+                if masked_capital <= 0:
+                    masked_capital = abs(int(client_pnl_before))
+
+                settlement = Settlement.objects.create(
+                    client_exchange=account,
+                    amount=share_payment,
+                    date=now,
+                    notes="Dues generated (Client Payments) - not a real payment",
+                )
+
+                if client_pnl_before < 0:
+                    # LOSS: settlement reduces funding by masked capital (PnL -> 0)
+                    if funding_before - masked_capital < 0:
+                        errors.append(f"{account.client.name} / {account.exchange.name}: funding would go negative")
+                        continue
+
+                    funding_after_settlement = funding_before - masked_capital
+                    exchange_after_settlement = exchange_before
+
+                    account.funding = funding_after_settlement
+                    account.exchange_balance = exchange_after_settlement
+                    account.save(update_fields=["funding", "exchange_balance"])
+
+                    Transaction.objects.create(
+                        client_exchange=account,
+                        date=now,
+                        type="RECORD_PAYMENT",
+                        amount=share_payment,  # +ve: client owes me (loss case)
+                        funding_before=funding_before,
+                        funding_after=funding_after_settlement,
+                        exchange_balance_before=exchange_before,
+                        exchange_balance_after=exchange_after_settlement,
+                        notes=f"Dues generated (not paid). Masked Capital: {masked_capital}. Linked Settlement ID: {settlement.id}",
+                    )
+
+                    # Auto re-funding: add masked capital back (restores original funding and exchange balance)
+                    funding_before_refund = int(account.funding)
+                    exchange_before_refund = int(account.exchange_balance)
+                    account.funding = funding_before_refund + masked_capital
+                    account.exchange_balance = exchange_before_refund + masked_capital
+                    account.save(update_fields=["funding", "exchange_balance"])
+
+                    Transaction.objects.create(
+                        client_exchange=account,
+                        date=now,
+                        type="FUNDING_AUTO",
+                        amount=masked_capital,
+                        funding_before=funding_before_refund,
+                        funding_after=int(account.funding),
+                        exchange_balance_before=exchange_before_refund,
+                        exchange_balance_after=int(account.exchange_balance),
+                        notes=f"Auto Re-Funding after dues generation (Settlement ID: {settlement.id}). Amount: {masked_capital} (Masked Capital)",
+                    )
+                else:
+                    # PROFIT: settlement reduces exchange balance by masked capital (PnL -> 0)
+                    if exchange_before - masked_capital < 0:
+                        errors.append(f"{account.client.name} / {account.exchange.name}: exchange balance would go negative")
+                        continue
+
+                    funding_after_settlement = funding_before
+                    exchange_after_settlement = exchange_before - masked_capital
+
+                    account.funding = funding_after_settlement
+                    account.exchange_balance = exchange_after_settlement
+                    account.save(update_fields=["funding", "exchange_balance"])
+
+                    Transaction.objects.create(
+                        client_exchange=account,
+                        date=now,
+                        type="RECORD_PAYMENT",
+                        amount=-share_payment,  # -ve: I owe client (profit case)
+                        funding_before=funding_before,
+                        funding_after=funding_after_settlement,
+                        exchange_balance_before=exchange_before,
+                        exchange_balance_after=exchange_after_settlement,
+                        notes=f"Dues generated (not paid). Masked Capital: {masked_capital}. Linked Settlement ID: {settlement.id}",
+                    )
+
+                # Close cycle (so it disappears from /clients/settlements/)
+                account.close_cycle()
+
+                # Convention:
+                #   +pending_balance => client owes me
+                #   -pending_balance => I owe client
+                settled_count += 1
+                touched_client_ids.add(account.client_id)
+        except ClientExchangeAccount.DoesNotExist:
+            pass
+        except ValidationError as e:
+            errors.append(str(e))
+        except Exception as e:
+            errors.append(f"Account {account_id}: {str(e)}")
+
+    if errors:
+        for err in errors[:5]:  # Show first 5 errors
+            messages.error(request, err)
+        if len(errors) > 5:
+            messages.error(request, f"... and {len(errors) - 5} more errors.")
+    if settled_count > 0:
+        messages.success(request, f"Pending dues generated in Client Payments for {settled_count} account(s).")
+    elif not errors:
+        messages.info(request, "No dues to generate.")
+
+    # Recalculate pending for impacted clients to keep balances consistent.
+    try:
+        with transaction.atomic():
+            for cid in touched_client_ids:
+                _recalculate_pending_for_client(cid)
+    except Exception:
+        pass
+
+    return redirect(reverse("pending_summary"))
 
 
 @login_required
@@ -2347,8 +2726,15 @@ def report_overview(request):
     """High-level reporting screen with simple totals and graphs."""
     from datetime import timedelta
     from collections import defaultdict
+    from decimal import Decimal
+    from django.db.models import Sum, Count
 
     today = date.today()
+    is_payments_reports = bool(
+        getattr(request, "resolver_match", None)
+        and request.resolver_match.url_name == "payments_report_overview"
+    )
+    profit_basis = "cashflow"
     report_type = request.GET.get("report_type", "monthly")  # Default to monthly
     # Get client_type from GET (to update session) or from session
     client_type_filter = request.GET.get("client_type") or request.session.get('client_type_filter', 'all')
@@ -2473,8 +2859,172 @@ def report_overview(request):
         except Client.DoesNotExist:
             pass
 
+    # -------------------------------------------------------------------------
+    # Client-payments → Reports (cash ledger)
+    # What user wants here is simple net cash: Received - Paid.
+    # This is driven by PendingPaymentTransaction (not trading PnL snapshot).
+    # -------------------------------------------------------------------------
+    if is_payments_reports:
+        from .models import PendingPaymentTransaction
+        from django.utils import timezone
+        from datetime import datetime, timedelta
 
-    
+        profit_basis = "cashflow_ledger"
+
+        ledger_qs = (
+            PendingPaymentTransaction.objects.filter(client__user=request.user)
+            .select_related("client", "client_exchange", "client_exchange__exchange")
+            .order_by("-date", "-id")
+        )
+
+        if client_id:
+            ledger_qs = ledger_qs.filter(client_id=client_id)
+        if exchange_id:
+            # Exchange filter is only reliable for new linked transactions
+            ledger_qs = ledger_qs.filter(client_exchange__exchange_id=exchange_id)
+
+        # Apply date filter (convert date -> aware datetime bounds)
+        if date_filter:
+            filter_dict = {}
+            if "date__gte" in date_filter:
+                d = date_filter["date__gte"]
+                if isinstance(d, date):
+                    filter_dict["date__gte"] = timezone.make_aware(datetime.combine(d, datetime.min.time()))
+                else:
+                    filter_dict["date__gte"] = d
+            if "date__lte" in date_filter:
+                d = date_filter["date__lte"]
+                if isinstance(d, date):
+                    filter_dict["date__lte"] = timezone.make_aware(datetime.combine(d, datetime.max.time()))
+                else:
+                    filter_dict["date__lte"] = d
+            if filter_dict:
+                ledger_qs = ledger_qs.filter(**filter_dict)
+
+        total_received = ledger_qs.filter(type="RECEIVED").aggregate(total=Sum("amount"))["total"] or 0
+        total_paid = ledger_qs.filter(type="GIVEN").aggregate(total=Sum("amount"))["total"] or 0
+        net_profit = int(total_received) - int(total_paid)
+
+        # For this section, "turnover" means cash moved
+        total_turnover = int(total_received) + int(total_paid)
+
+        # Pending totals (should match Pending Payments page)
+        pending_clients = Client.objects.filter(user=request.user)
+        if client_id:
+            pending_clients = pending_clients.filter(pk=client_id)
+        pending_receivable = sum(c.pending_balance for c in pending_clients if c.pending_balance > 0)
+        pending_payable = abs(sum(c.pending_balance for c in pending_clients if c.pending_balance < 0))
+        net_pending = int(pending_receivable) - int(pending_payable)
+
+        # Chart range (max 30 days)
+        chart_start = today - timedelta(days=30)
+        chart_end = today
+        if "date__gte" in date_filter and isinstance(date_filter.get("date__gte"), date):
+            chart_start = date_filter["date__gte"]
+        if "date__lte" in date_filter and isinstance(date_filter.get("date__lte"), date):
+            chart_end = date_filter["date__lte"]
+        if (chart_end - chart_start).days > 30:
+            chart_start = chart_end - timedelta(days=30)
+
+        daily_bucket = defaultdict(lambda: {"received": 0, "paid": 0})
+        for tx in ledger_qs.filter(date__date__gte=chart_start, date__date__lte=chart_end):
+            d = tx.date.date()
+            if tx.type == "RECEIVED":
+                daily_bucket[d]["received"] += int(tx.amount)
+            else:
+                daily_bucket[d]["paid"] += int(tx.amount)
+
+        date_labels = []
+        profit_data = []
+        loss_data = []
+        turnover_data = []
+        cur = chart_start
+        days_count = 0
+        while cur <= chart_end and days_count < 30:
+            r = daily_bucket[cur]["received"]
+            p = daily_bucket[cur]["paid"]
+            net = r - p
+            date_labels.append(cur.strftime("%Y-%m-%d"))
+            profit_data.append(float(net) if net > 0 else 0.0)
+            loss_data.append(float(abs(net)) if net < 0 else 0.0)
+            turnover_data.append(float(r + p))
+            cur += timedelta(days=1)
+            days_count += 1
+
+        type_labels = ["Received", "Paid"]
+        type_counts = [
+            ledger_qs.filter(type="RECEIVED").aggregate(c=Count("id"))["c"] or 0,
+            ledger_qs.filter(type="GIVEN").aggregate(c=Count("id"))["c"] or 0,
+        ]
+        type_amounts = [float(total_received or 0), float(total_paid or 0)]
+        type_colors = ["#10b981", "#ef4444"]
+
+        # Top clients by net profit (same 30d chart window)
+        per_client = defaultdict(int)
+        for tx in ledger_qs.filter(date__date__gte=chart_start, date__date__lte=chart_end).select_related("client"):
+            per_client[tx.client_id] += int(tx.amount) if tx.type == "RECEIVED" else -int(tx.amount)
+
+        top = sorted(per_client.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        client_map = {c.id: c for c in all_clients}
+        client_labels = []
+        client_profits = []
+        for cid, net in top:
+            c = client_map.get(cid)
+            if not c:
+                continue
+            client_labels.append(c.name)
+            client_profits.append(float(net))
+
+        context = {
+            "report_type": report_type,
+            "client_type_filter": client_type_filter,
+            "all_clients": all_clients,
+            "all_exchanges": all_exchanges,
+            "selected_client": selected_client,
+            "selected_client_id": int(client_id) if client_id else None,
+            "selected_exchange_id": int(exchange_id) if exchange_id else None,
+            "today": today,
+            "profit_basis": profit_basis,
+            "net_pending": net_pending,
+            "pending_receivable": int(pending_receivable),
+            "pending_payable": int(pending_payable),
+            "total_turnover": int(total_turnover),
+            "your_total_profit": int(net_profit),
+            "your_total_income_from_clients": int(total_received),
+            "your_total_paid_to_clients": int(total_paid),
+            "my_profit": 0,
+            "friend_profit": 0,
+            "company_profit": 0,
+            "daily_labels": json.dumps(date_labels),
+            "daily_profit": json.dumps(profit_data),
+            "daily_loss": json.dumps(loss_data),
+            "daily_turnover": json.dumps(turnover_data),
+            "weekly_labels": json.dumps([]),
+            "weekly_profit": json.dumps([]),
+            "weekly_loss": json.dumps([]),
+            "weekly_turnover": json.dumps([]),
+            "type_labels": json.dumps(type_labels),
+            "type_counts": json.dumps(type_counts),
+            "type_amounts": json.dumps(type_amounts),
+            "type_colors": json.dumps(type_colors),
+            "monthly_labels": json.dumps([]),
+            "monthly_profit": json.dumps([]),
+            "monthly_loss": json.dumps([]),
+            "monthly_turnover": json.dumps([]),
+            "client_labels": json.dumps(client_labels),
+            "client_profits": json.dumps(client_profits),
+            "time_travel_mode": time_travel_mode,
+            "start_date_str": start_date_str,
+            "end_date_str": end_date_str,
+            "as_of_str": as_of_str,
+            "time_travel_transactions": [],
+            "selected_month": month_str,
+            "selected_month_start": selected_month_start,
+            "selected_month_end": selected_month_end,
+        }
+        return render(request, "core/reports/overview.html", context)
+
+
     # Overall totals (filtered by time travel if applicable)
     # CORRECTNESS LOGIC: Turnover = Σ(|ExchangeBalanceAfter − ExchangeBalanceBefore|) for TRADE transactions only
     # Turnover measures trading activity, NOT funding or settlements
@@ -2524,7 +3074,6 @@ def report_overview(request):
     #
     # SINGLE SOURCE OF TRUTH: RECORD_PAYMENT transactions only
     # Split is calculated from Your Total Profit, ensuring exact match
-    from decimal import Decimal
     from django.utils import timezone
     from datetime import datetime
     
@@ -2591,10 +3140,7 @@ def report_overview(request):
     total_weighted_amount = Decimal(0)
     
     # Use the same payment_qs queryset from Your Total Profit calculation
-    payment_transactions = payment_qs.select_related(
-        'client_exchange', 
-        'client_exchange__report_config'
-    )
+    payment_transactions = payment_qs.select_related("client_exchange")
     
     tx_count = 0
     skipped_no_config = 0
@@ -2610,21 +3156,16 @@ def report_overview(request):
             skipped_zero_pct += 1
             continue
         
-        report_config = getattr(account, 'report_config', None)
-        
-        if report_config:
-            my_own_pct = Decimal(str(report_config.my_own_percentage))
-            friend_pct = Decimal(str(report_config.friend_percentage))
-            
-            # Weight by absolute payment amount
-            weight = abs(payment_amount)
-            weighted_my_own_contrib = weight * (my_own_pct / my_total_pct)
-            weighted_friend_contrib = weight * (friend_pct / my_total_pct)
-            total_weighted_my_own += weighted_my_own_contrib
-            total_weighted_friend += weighted_friend_contrib
-            total_weighted_amount += weight
-        else:
-            skipped_no_config += 1
+        my_own_pct = Decimal(str(getattr(account, "my_own_percentage", 0) or 0))
+        friend_pct = Decimal(str(getattr(account, "company_percentage", 0) or 0))
+
+        # Weight by absolute payment amount
+        weight = abs(payment_amount)
+        weighted_my_own_contrib = weight * (my_own_pct / my_total_pct)
+        weighted_friend_contrib = weight * (friend_pct / my_total_pct)
+        total_weighted_my_own += weighted_my_own_contrib
+        total_weighted_friend += weighted_friend_contrib
+        total_weighted_amount += weight
     
     # Split Your Total Profit using weighted average percentages
     if total_weighted_amount > 0:
@@ -2649,6 +3190,51 @@ def report_overview(request):
     
     # Remove company_profit (obsolete)
     company_profit = Decimal(0)
+
+    # -------------------------------------------------------------------------
+    # Client Payments → Reports should be "report" (PnL/share snapshot),
+    # not only cash-flow from settlements.
+    # This also avoids confusing users when they haven't settled yet.
+    # -------------------------------------------------------------------------
+    if is_payments_reports:
+        profit_basis = "pnl"
+
+        accounts_qs = ClientExchangeAccount.objects.filter(client__user=request.user).select_related(
+            "client", "exchange"
+        )
+        if client_id:
+            accounts_qs = accounts_qs.filter(client_id=client_id)
+        if exchange_id:
+            accounts_qs = accounts_qs.filter(exchange_id=exchange_id)
+
+        your_total_profit = Decimal(0)
+        your_total_income_from_clients = Decimal(0)
+        your_total_paid_to_clients = Decimal(0)
+        my_profit_total = Decimal(0)
+        friend_profit_total = Decimal(0)
+
+        for account in accounts_qs:
+            pnl = account.compute_client_pnl()
+            if pnl == 0:
+                continue
+
+            share_amount = Decimal(str(account.compute_my_share()))
+            signed_share = share_amount if pnl < 0 else -share_amount  # + => client owes me, - => I owe client
+
+            your_total_profit += signed_share
+            if signed_share >= 0:
+                your_total_income_from_clients += signed_share
+            else:
+                your_total_paid_to_clients += abs(signed_share)
+
+            my_total_pct = Decimal(str(account.my_percentage or 0))
+            if my_total_pct != 0:
+                my_own_pct = Decimal(str(getattr(account, "my_own_percentage", 0) or 0))
+                friend_pct = Decimal(str(getattr(account, "company_percentage", 0) or 0))
+                my_profit_total += signed_share * (my_own_pct / my_total_pct)
+                friend_profit_total += signed_share * (friend_pct / my_total_pct)
+            else:
+                my_profit_total += signed_share
 
     # Daily trends for last 30 days (or filtered by time travel)
     if time_travel_mode and start_date_str and end_date_str:
@@ -2896,6 +3482,7 @@ def report_overview(request):
         "my_profit": my_profit_total,  # Pass Decimal directly to preserve decimals
         "friend_profit": friend_profit_total,  # Pass Decimal directly to preserve decimals
         "company_profit": company_profit,  # Kept for backward compatibility, always 0
+        "profit_basis": profit_basis,
         "daily_labels": json.dumps(date_labels),
         "daily_profit": json.dumps(profit_data),
         "daily_loss": json.dumps(loss_data),
@@ -3250,6 +3837,7 @@ def client_exchange_edit(request, pk):
     can_edit_exchange = True
     
     if request.method == "POST":
+        old_my_percentage = client_exchange.my_percentage
         # Get percentage values from form
         my_percentage = request.POST.get("my_percentage", "").strip()
         loss_share_percentage = request.POST.get("loss_share_percentage", "").strip()
@@ -3261,40 +3849,11 @@ def client_exchange_edit(request, pk):
         new_exchange_id = request.POST.get("exchange")
         if new_exchange_id:
             new_exchange = get_object_or_404(Exchange, pk=new_exchange_id)
-            
-            # Check if this exchange-client combination already exists (excluding current)
-            existing = ClientExchangeAccount.objects.filter(
-                client=client_exchange.client,
-                exchange=new_exchange
-            ).exclude(pk=client_exchange.pk).first()
-            
-            if existing:
-                exchanges = Exchange.objects.all().order_by("name")
-                client_type = "company" if False else "my"
-                
-                # Get report config if exists
-                report_config = None
-                try:
-                    report_config = client_exchange.report_config
-                except ClientExchangeReportConfig.DoesNotExist:
-                    pass
-                
-                # Check if loss percentage can be edited
-                has_transactions = Transaction.objects.filter(client_exchange=client_exchange).exists()
-                can_edit_loss_percentage = not has_transactions
-                
-                return render(request, "core/exchanges/edit_client_link.html", {
-                    "client_exchange": client_exchange,
-                    "exchanges": exchanges,
-                    "can_edit_exchange": can_edit_exchange,
-                    "client_type": client_type,
-                    "report_config": report_config,
-                    "can_edit_loss_percentage": can_edit_loss_percentage,
-                    "has_transactions": has_transactions,
-                    "error": f"This client already has a link to {new_exchange.name}. Please edit that link instead.",
-                })
-            
-            client_exchange.exchange = new_exchange
+
+            # Allow multiple accounts for the same exchange (client can have duplicates).
+            # Only update if the exchange actually changed.
+            if new_exchange.pk != client_exchange.exchange_id:
+                client_exchange.exchange = new_exchange
 
         # Update percentages (using Decimal for precision)
         from decimal import Decimal
@@ -3303,20 +3862,16 @@ def client_exchange_edit(request, pk):
             try:
                 my_pct = Decimal(str(my_percentage))
                 if 0 <= my_pct <= 100:
-                    # Set both loss and profit share percentages to match my_percentage
-                    # Convert to int for IntegerField (round to nearest integer)
-                    my_pct_int = int(round(float(my_pct)))
+                    # Keep loss/profit share % in sync with My Total % (decimal supported).
                     
                     # Update my_percentage
                     client_exchange.my_percentage = my_pct
                     
-                    # Only update loss_share_percentage if no transactions exist (immutable rule)
-                    has_transactions = Transaction.objects.filter(client_exchange=client_exchange).exists()
-                    if not has_transactions:
-                        client_exchange.loss_share_percentage = my_pct_int
+                    # Keep loss/profit shares aligned to My Total %.
+                    client_exchange.loss_share_percentage = my_pct
                     
                     # Always update profit_share_percentage
-                    client_exchange.profit_share_percentage = my_pct_int
+                    client_exchange.profit_share_percentage = my_pct
                     percentage_updated = True
             except (ValueError, TypeError) as e:
                 from django.contrib import messages
@@ -3324,11 +3879,6 @@ def client_exchange_edit(request, pk):
                 # Re-render form with error
                 exchanges = Exchange.objects.all().order_by("name")
                 client_type = "company" if False else "my"
-                report_config = None
-                try:
-                    report_config = client_exchange.report_config
-                except ClientExchangeReportConfig.DoesNotExist:
-                    pass
                 has_transactions = Transaction.objects.filter(client_exchange=client_exchange).exists()
                 can_edit_loss_percentage = not has_transactions
                 return render(request, "core/exchanges/edit_client_link.html", {
@@ -3338,7 +3888,6 @@ def client_exchange_edit(request, pk):
                     "days_since_creation": days_since_creation,
                     "days_remaining": days_remaining,
                     "client_type": client_type,
-                    "report_config": report_config,
                     "can_edit_loss_percentage": can_edit_loss_percentage,
                     "has_transactions": has_transactions,
                     "error": f"Invalid percentage value: {str(e)}",
@@ -3350,29 +3899,33 @@ def client_exchange_edit(request, pk):
         # Track if report config was successfully updated
         report_config_updated = False
         
-        # Update report config if provided
+        # Update / normalize stored split percentages on the account.
+        # IMPORTANT: Company% + MyOwn% must equal My Total %.
         if friend_percentage or my_own_percentage:
             try:
+                epsilon = Decimal("0.01")
                 # Ensure proper Decimal conversion - handle empty strings and preserve decimal precision
                 friend_pct = Decimal(str(friend_percentage).strip()) if friend_percentage and friend_percentage.strip() else Decimal('0')
                 own_pct = Decimal(str(my_own_percentage).strip()) if my_own_percentage and my_own_percentage.strip() else Decimal('0')
                 my_total_pct = Decimal(str(client_exchange.my_percentage))
                 
-                # Validate: company % + my own % = my total % (with epsilon for floating point comparison)
-                epsilon = Decimal('0.01')
                 sum_percentages = friend_pct + own_pct
+
+                # If My Total % changed and sum doesn't match, auto-rebalance.
+                if old_my_percentage is not None and Decimal(str(old_my_percentage)) != my_total_pct and abs(sum_percentages - my_total_pct) >= epsilon:
+                    # Prefer keeping Company% if possible, adjust My Own %.
+                    if friend_pct > my_total_pct:
+                        friend_pct = my_total_pct
+                        own_pct = Decimal("0")
+                    else:
+                        own_pct = my_total_pct - friend_pct
+                    sum_percentages = friend_pct + own_pct
+
+                # Validate: company % + my own % = my total %
                 if abs(sum_percentages - my_total_pct) < epsilon:
-                    report_config, created = ClientExchangeReportConfig.objects.get_or_create(
-                        client_exchange=client_exchange,
-                        defaults={
-                            'friend_percentage': friend_pct,
-                            'my_own_percentage': own_pct,
-                        }
-                    )
-                    if not created:
-                        report_config.friend_percentage = friend_pct
-                        report_config.my_own_percentage = own_pct
-                        report_config.save()
+                    client_exchange.company_percentage = friend_pct
+                    client_exchange.my_own_percentage = own_pct
+                    client_exchange.save(update_fields=["company_percentage", "my_own_percentage"])
                     report_config_updated = True
                 else:
                     from django.contrib import messages
@@ -3399,13 +3952,6 @@ def client_exchange_edit(request, pk):
     exchanges = Exchange.objects.all().order_by("name")
     client_type = "company" if False else "my"
     
-    # Get report config if exists
-    report_config = None
-    try:
-        report_config = client_exchange.report_config
-    except ClientExchangeReportConfig.DoesNotExist:
-        pass
-    
     # Check if loss percentage can be edited (immutable if transactions exist)
     has_transactions = Transaction.objects.filter(client_exchange=client_exchange).exists()
     can_edit_loss_percentage = not has_transactions
@@ -3415,10 +3961,59 @@ def client_exchange_edit(request, pk):
         "exchanges": exchanges,
         "can_edit_exchange": can_edit_exchange,
         "client_type": client_type,
-        "report_config": report_config,
         "can_edit_loss_percentage": can_edit_loss_percentage,
         "has_transactions": has_transactions,
     })
+
+
+@login_required
+@require_http_methods(["POST"])
+def client_exchange_delete(request, pk):
+    """
+    Delete ONE client-exchange account for the current user.
+
+    This is a destructive action: it removes the exchange account and all trading audit history
+    (Transactions/Settlements) for that account. It also deletes linked payment ledger entries
+    (PendingPaymentTransaction) so the client's pending totals remain consistent.
+    """
+    from django.contrib import messages
+    from django.db import transaction as db_transaction
+    from django.utils.http import url_has_allowed_host_and_scheme
+    from .models import PendingPaymentTransaction, Client
+
+    next_url = (request.POST.get("next") or request.GET.get("next") or "").strip()
+
+    with db_transaction.atomic():
+        account = (
+            ClientExchangeAccount.objects.select_for_update()
+            .select_related("client", "exchange")
+            .get(pk=pk, client__user=request.user)
+        )
+        client = Client.objects.select_for_update().get(pk=account.client_id, user=request.user)
+
+        # 1) Delete linked payment transactions first so they reverse their effects on pending balances.
+        linked_payments = PendingPaymentTransaction.objects.filter(client_exchange=account).order_by("-date", "-id")
+        for tx in linked_payments:
+            tx.delete()
+
+        # 2) If this account still has a residual pending_balance (e.g., seeded but no payments recorded),
+        # remove it from the client before deleting the account.
+        if account.pending_balance:
+            client.pending_balance = int(client.pending_balance) - int(account.pending_balance)
+            client.save(update_fields=["pending_balance"])
+
+        # 3) Delete trading audit history for this account (hard delete).
+        Settlement.objects.filter(client_exchange=account).delete()
+        Transaction.objects.filter(client_exchange=account).delete()
+
+        exchange_name = account.exchange.name
+        account.delete()
+
+    messages.success(request, f"Deleted exchange account '{exchange_name}' for client '{client.name}'.")
+
+    if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
+        return redirect(next_url)
+    return redirect(reverse("client_detail", args=[client.pk]))
 
 
 # Transaction Management Views
@@ -3805,11 +4400,8 @@ def report_daily(request):
     total_weighted_friend = Decimal(0)
     total_weighted_amount = Decimal(0)
     
-    # Get payment transactions with report_config for splitting
-    payment_transactions = payment_qs.select_related(
-        'client_exchange', 
-        'client_exchange__report_config'
-    )
+    # Get payment transactions for splitting (single-table percentages).
+    payment_transactions = payment_qs.select_related("client_exchange")
     
     tx_count = 0
     skipped_no_config = 0
@@ -3825,21 +4417,16 @@ def report_daily(request):
             skipped_zero_pct += 1
             continue
         
-        report_config = getattr(account, 'report_config', None)
-        
-        if report_config:
-            my_own_pct = Decimal(str(report_config.my_own_percentage))
-            friend_pct = Decimal(str(report_config.friend_percentage))
-            
-            # Weight by absolute payment amount
-            weight = abs(payment_amount)
-            weighted_my_own_contrib = weight * (my_own_pct / my_total_pct)
-            weighted_friend_contrib = weight * (friend_pct / my_total_pct)
-            total_weighted_my_own += weighted_my_own_contrib
-            total_weighted_friend += weighted_friend_contrib
-            total_weighted_amount += weight
-        else:
-            skipped_no_config += 1
+        my_own_pct = Decimal(str(getattr(account, "my_own_percentage", 0) or 0))
+        friend_pct = Decimal(str(getattr(account, "company_percentage", 0) or 0))
+
+        # Weight by absolute payment amount
+        weight = abs(payment_amount)
+        weighted_my_own_contrib = weight * (my_own_pct / my_total_pct)
+        weighted_friend_contrib = weight * (friend_pct / my_total_pct)
+        total_weighted_my_own += weighted_my_own_contrib
+        total_weighted_friend += weighted_friend_contrib
+        total_weighted_amount += weight
     
     # Split Your Total Profit using weighted average percentages
     if total_weighted_amount > 0:
@@ -4010,11 +4597,8 @@ def report_weekly(request):
     total_weighted_friend = Decimal(0)
     total_weighted_amount = Decimal(0)
     
-    # Get payment transactions with report_config for splitting
-    payment_transactions = payment_qs.select_related(
-        'client_exchange', 
-        'client_exchange__report_config'
-    )
+    # Get payment transactions for splitting (single-table percentages).
+    payment_transactions = payment_qs.select_related("client_exchange")
     
     tx_count = 0
     skipped_no_config = 0
@@ -4030,21 +4614,16 @@ def report_weekly(request):
             skipped_zero_pct += 1
             continue
         
-        report_config = getattr(account, 'report_config', None)
-        
-        if report_config:
-            my_own_pct = Decimal(str(report_config.my_own_percentage))
-            friend_pct = Decimal(str(report_config.friend_percentage))
-            
-            # Weight by absolute payment amount
-            weight = abs(payment_amount)
-            weighted_my_own_contrib = weight * (my_own_pct / my_total_pct)
-            weighted_friend_contrib = weight * (friend_pct / my_total_pct)
-            total_weighted_my_own += weighted_my_own_contrib
-            total_weighted_friend += weighted_friend_contrib
-            total_weighted_amount += weight
-        else:
-            skipped_no_config += 1
+        my_own_pct = Decimal(str(getattr(account, "my_own_percentage", 0) or 0))
+        friend_pct = Decimal(str(getattr(account, "company_percentage", 0) or 0))
+
+        # Weight by absolute payment amount
+        weight = abs(payment_amount)
+        weighted_my_own_contrib = weight * (my_own_pct / my_total_pct)
+        weighted_friend_contrib = weight * (friend_pct / my_total_pct)
+        total_weighted_my_own += weighted_my_own_contrib
+        total_weighted_friend += weighted_friend_contrib
+        total_weighted_amount += weight
     
     # Split Your Total Profit using weighted average percentages
     if total_weighted_amount > 0:
@@ -4237,11 +4816,8 @@ def report_monthly(request):
     total_weighted_friend = Decimal(0)
     total_weighted_amount = Decimal(0)
     
-    # Get payment transactions with report_config for splitting
-    payment_transactions = payment_qs.select_related(
-        'client_exchange', 
-        'client_exchange__report_config'
-    )
+    # Get payment transactions for splitting (single-table percentages).
+    payment_transactions = payment_qs.select_related("client_exchange")
     
     tx_count = 0
     skipped_no_config = 0
@@ -4257,21 +4833,16 @@ def report_monthly(request):
             skipped_zero_pct += 1
             continue
         
-        report_config = getattr(account, 'report_config', None)
-        
-        if report_config:
-            my_own_pct = Decimal(str(report_config.my_own_percentage))
-            friend_pct = Decimal(str(report_config.friend_percentage))
-            
-            # Weight by absolute payment amount
-            weight = abs(payment_amount)
-            weighted_my_own_contrib = weight * (my_own_pct / my_total_pct)
-            weighted_friend_contrib = weight * (friend_pct / my_total_pct)
-            total_weighted_my_own += weighted_my_own_contrib
-            total_weighted_friend += weighted_friend_contrib
-            total_weighted_amount += weight
-        else:
-            skipped_no_config += 1
+        my_own_pct = Decimal(str(getattr(account, "my_own_percentage", 0) or 0))
+        friend_pct = Decimal(str(getattr(account, "company_percentage", 0) or 0))
+
+        # Weight by absolute payment amount
+        weight = abs(payment_amount)
+        weighted_my_own_contrib = weight * (my_own_pct / my_total_pct)
+        weighted_friend_contrib = weight * (friend_pct / my_total_pct)
+        total_weighted_my_own += weighted_my_own_contrib
+        total_weighted_friend += weighted_friend_contrib
+        total_weighted_amount += weight
     
     # Split Your Total Profit using weighted average percentages
     if total_weighted_amount > 0:
@@ -4508,11 +5079,8 @@ def report_custom(request):
     total_weighted_friend = Decimal(0)
     total_weighted_amount = Decimal(0)
     
-    # Get payment transactions with report_config for splitting
-    payment_transactions = payment_qs.select_related(
-        'client_exchange', 
-        'client_exchange__report_config'
-    )
+    # Get payment transactions for splitting (single-table percentages).
+    payment_transactions = payment_qs.select_related("client_exchange")
     
     tx_count = 0
     skipped_no_config = 0
@@ -4528,21 +5096,16 @@ def report_custom(request):
             skipped_zero_pct += 1
             continue
         
-        report_config = getattr(account, 'report_config', None)
-        
-        if report_config:
-            my_own_pct = Decimal(str(report_config.my_own_percentage))
-            friend_pct = Decimal(str(report_config.friend_percentage))
-            
-            # Weight by absolute payment amount
-            weight = abs(payment_amount)
-            weighted_my_own_contrib = weight * (my_own_pct / my_total_pct)
-            weighted_friend_contrib = weight * (friend_pct / my_total_pct)
-            total_weighted_my_own += weighted_my_own_contrib
-            total_weighted_friend += weighted_friend_contrib
-            total_weighted_amount += weight
-        else:
-            skipped_no_config += 1
+        my_own_pct = Decimal(str(getattr(account, "my_own_percentage", 0) or 0))
+        friend_pct = Decimal(str(getattr(account, "company_percentage", 0) or 0))
+
+        # Weight by absolute payment amount
+        weight = abs(payment_amount)
+        weighted_my_own_contrib = weight * (my_own_pct / my_total_pct)
+        weighted_friend_contrib = weight * (friend_pct / my_total_pct)
+        total_weighted_my_own += weighted_my_own_contrib
+        total_weighted_friend += weighted_friend_contrib
+        total_weighted_amount += weight
     
     # Split Your Total Profit using weighted average percentages
     if total_weighted_amount > 0:
@@ -4710,12 +5273,13 @@ def link_client_to_exchange(request):
             })
         
         try:
+            from decimal import Decimal
             client = Client.objects.get(pk=client_id, user=request.user)
             exchange = Exchange.objects.get(pk=exchange_id)
-            my_percentage_float = float(my_percentage)
+            my_pct = Decimal(str(my_percentage))
             
             # Validate percentage range
-            if my_percentage_float < 0 or my_percentage_float > 100:
+            if my_pct < 0 or my_pct > 100:
                 from django.contrib import messages
                 messages.error(request, "My Total % must be between 0 and 100.")
                 return render(request, "core/exchanges/link_to_client.html", {
@@ -4723,6 +5287,25 @@ def link_client_to_exchange(request):
                     "exchanges": Exchange.objects.all().order_by("name"),
                 })
             
+            friend_pct = Decimal(str(friend_percentage).strip()) if friend_percentage and friend_percentage.strip() else Decimal("0")
+            own_pct = Decimal(str(my_own_percentage).strip()) if my_own_percentage and my_own_percentage.strip() else Decimal("0")
+
+            # Normalize split so Company% + MyOwn% == MyTotal%
+            # If user didn't fill anything, default: Company 0, MyOwn = MyTotal.
+            if (not friend_percentage.strip()) and (not my_own_percentage.strip()):
+                friend_pct = Decimal("0")
+                own_pct = my_pct
+            else:
+                epsilon = Decimal("0.01")
+                sum_pct = friend_pct + own_pct
+                if abs(sum_pct - my_pct) >= epsilon:
+                    # Prefer keeping Company% and adjust My Own %.
+                    if friend_pct > my_pct:
+                        friend_pct = my_pct
+                        own_pct = Decimal("0")
+                    else:
+                        own_pct = my_pct - friend_pct
+
             # Create ClientExchangeAccount
             # MASKED SHARE SETTLEMENT SYSTEM: Set loss and profit share percentages
             # Default to my_percentage for both (can be changed later, but loss % becomes immutable once data exists)
@@ -4731,35 +5314,12 @@ def link_client_to_exchange(request):
                 exchange=exchange,
                 funding=0,
                 exchange_balance=0,
-                my_percentage=my_percentage_float,
-                loss_share_percentage=my_percentage_float,  # Default to my_percentage
-                profit_share_percentage=my_percentage_float,  # Default to my_percentage (can change anytime)
+                my_percentage=my_pct,
+                company_percentage=friend_pct,
+                my_own_percentage=own_pct,
+                loss_share_percentage=my_pct,  # Default to my_percentage
+                profit_share_percentage=my_pct,  # Default to my_percentage (can change anytime)
             )
-            
-            # Create report config if friend/own percentages provided
-            if friend_percentage or my_own_percentage:
-                from decimal import Decimal
-                # Ensure proper Decimal conversion - handle empty strings and preserve decimal precision
-                friend_pct = Decimal(str(friend_percentage).strip()) if friend_percentage and friend_percentage.strip() else Decimal('0')
-                own_pct = Decimal(str(my_own_percentage).strip()) if my_own_percentage and my_own_percentage.strip() else Decimal('0')
-                my_total_pct = Decimal(str(my_percentage_float))
-                
-                # Validate: friend % + my own % = my total % (with epsilon for floating point comparison)
-                epsilon = Decimal('0.01')
-                sum_percentages = friend_pct + own_pct
-                if abs(sum_percentages - my_total_pct) >= epsilon:
-                    from django.contrib import messages
-                    messages.warning(
-                        request,
-                        f"Company % ({friend_pct:.2f}) + My Own % ({own_pct:.2f}) = {sum_percentages:.2f}, "
-                        f"but My Total % = {my_total_pct:.2f}. Report config not created."
-                    )
-                else:
-                    ClientExchangeReportConfig.objects.create(
-                        client_exchange=account,
-                        friend_percentage=friend_pct,
-                        my_own_percentage=own_pct,
-                    )
             
             from django.contrib import messages
             messages.success(request, f"Successfully linked '{client.name}' to '{exchange.name}'.")
@@ -4796,16 +5356,178 @@ def link_client_to_exchange(request):
 
 
 @login_required
-def exchange_account_detail(request, pk):
-    """View details of a client-exchange account."""
+def exchange_account_detail_redirect_with_slug(request, pk):
+    """Redirect to account detail URL that includes exchange name (e.g. .../account/13/dafa/)."""
+    account = get_object_or_404(ClientExchangeAccount, pk=pk, client__user=request.user)
+    slug = account.exchange.get_slug()
+    return redirect(reverse("payments_exchange_account_detail", args=[account.pk, slug]))
+
+
+@login_required
+def exchange_account_detail_redirect_with_slug_clients(request, pk):
+    """Redirect client account URL to include exchange slug (e.g. .../clients/exchanges/account/15/dafa/)."""
+    account = get_object_or_404(ClientExchangeAccount, pk=pk, client__user=request.user)
+    slug = account.exchange.get_slug()
+    return redirect(reverse("exchange_account_detail_with_slug", args=[account.pk, slug]))
+
+
+@login_required
+def exchange_account_detail(request, pk, exchange_slug=None):
+    """View details of a client-exchange account. For client-payments, exchange_slug is in URL (e.g. dafa, diamond)."""
     account = get_object_or_404(ClientExchangeAccount, pk=pk, client__user=request.user)
     
-    # MASKED SHARE SETTLEMENT SYSTEM: Calculate values
+    # MASKED SHARE SETTLEMENT SYSTEM: Calculate values (lock share before getting remaining)
+    account.lock_initial_share_if_needed()
     client_pnl = account.compute_client_pnl()
     final_share = account.compute_my_share()
     settlement_info = account.get_remaining_settlement_amount()
     remaining_amount = settlement_info['remaining']
+    # Use share as fallback when remaining is 0 but there's unsettled PnL (edge case)
+    pending_amount = remaining_amount if remaining_amount > 0 else (final_share if client_pnl != 0 else 0)
+
+    # Client-payments pages need per-exchange pending split (e.g. dafa vs diamond).
+    # We derive this from PendingPaymentTransaction notes when present; otherwise fall back to settlement logic above.
+    pending_card_amount = pending_amount
+    pending_card_direction = "settled"  # settled | client_owes_me | i_owe_client
+    pending_card_source = "settlement"
+    payment_transactions = None
+    payments_paid = 0
+    payments_received = 0
+    payments_net_paid_minus_received = 0
+
+    if pending_amount > 0:
+        pending_card_direction = "i_owe_client" if client_pnl > 0 else "client_owes_me"
+
+    try:
+        if request.resolver_match and request.resolver_match.url_name == "payments_exchange_account_detail":
+            from .models import PendingPaymentTransaction
+            # Preferred: strict separation per exchange account (supports duplicate exchange names).
+            payment_transactions = PendingPaymentTransaction.objects.filter(
+                client_exchange=account
+            ).order_by("-date", "-id")
+
+            # Payment PnL for this exchange account (client-payments meaning):
+            # net = Paid - Received
+            payments_paid = (
+                PendingPaymentTransaction.objects.filter(client_exchange=account, type="GIVEN")
+                .aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            payments_received = (
+                PendingPaymentTransaction.objects.filter(client_exchange=account, type="RECEIVED")
+                .aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            payments_net_paid_minus_received = int(payments_paid) - int(payments_received)
+
+            # Client-payments: pending is ONLY from the ledger (generated dues + real payments).
+            pending_card_source = "ledger"
+            pending_card_amount = abs(int(account.pending_balance))
+            if account.pending_balance > 0:
+                pending_card_direction = "client_owes_me"
+            elif account.pending_balance < 0:
+                pending_card_direction = "i_owe_client"
+            else:
+                pending_card_direction = "settled"
+
+            # Backward compatibility: legacy transactions without client_exchange.
+            if not payment_transactions.exists():
+                identifiers = []
+                if account.exchange.name:
+                    identifiers.append(account.exchange.name)
+                if account.exchange.code:
+                    identifiers.append(account.exchange.code)
+
+                if identifiers:
+                    q = Q()
+                    for ident in identifiers:
+                        q |= Q(notes__icontains=ident)
+
+                    payment_transactions = PendingPaymentTransaction.objects.filter(
+                        client=account.client,
+                        client_exchange__isnull=True,
+                    ).filter(q).order_by("-date", "-id")
+    except Exception:
+        # If anything goes wrong, keep settlement-based fallback.
+        pass
     
+    # Backfill audit transactions for older "dues generated" settlements (so they show up in history).
+    # Some earlier runs created Settlement rows without creating Transaction audit rows.
+    try:
+        dues_settlements = Settlement.objects.filter(
+            client_exchange=account,
+            notes__icontains="Dues generated",
+        ).order_by("date", "id")
+
+        for s in dues_settlements:
+            linked_marker = f"Linked Settlement ID: {s.id}"
+            has_audit = Transaction.objects.filter(
+                client_exchange=account,
+                notes__icontains=linked_marker,
+            ).exists()
+            if has_audit:
+                continue
+
+            # Infer loss/profit direction from the last known funding/exchange state before this settlement.
+            last_state = (
+                Transaction.objects.filter(
+                    client_exchange=account,
+                    exchange_balance_after__isnull=False,
+                    funding_after__isnull=False,
+                    date__lte=s.date,
+                )
+                .order_by("-date", "-id")
+                .first()
+            )
+
+            pnl_sign = None
+            if last_state:
+                try:
+                    pnl_sign = int(last_state.exchange_balance_after) - int(last_state.funding_after)
+                except Exception:
+                    pnl_sign = None
+
+            if pnl_sign is None:
+                pnl_sign = int(account.locked_initial_pnl or 0)
+
+            is_loss_case = pnl_sign < 0
+            abs_pnl = abs(int(pnl_sign)) if pnl_sign else 0
+
+            # Best-effort masked capital (only for display/audit; balances are not recomputed from this).
+            pct = int(account.loss_share_percentage or 0) if is_loss_case else int(account.profit_share_percentage or 0)
+            if pct <= 0:
+                try:
+                    pct = int(round(float(account.my_percentage or 0)))
+                except Exception:
+                    pct = 0
+
+            initial_share = int((abs_pnl * pct) // 100) if abs_pnl and pct else 0
+            if initial_share <= 0:
+                initial_share = int(s.amount)
+            if abs_pnl <= 0:
+                abs_pnl = int(s.amount)
+
+            masked_capital = int(round((int(s.amount) * abs_pnl) / initial_share)) if initial_share else abs_pnl
+
+            Transaction.objects.create(
+                client_exchange=account,
+                date=s.date,
+                type="RECORD_PAYMENT",
+                amount=int(s.amount) if is_loss_case else -int(s.amount),
+                notes=f"Backfilled dues audit (not paid). Masked Capital: {masked_capital}. {linked_marker}",
+            )
+
+            if is_loss_case:
+                Transaction.objects.create(
+                    client_exchange=account,
+                    date=s.date,
+                    type="FUNDING_AUTO",
+                    amount=int(masked_capital),
+                    notes=f"Backfilled auto re-funding after dues generation (not paid). Masked Capital: {masked_capital}. {linked_marker}",
+                )
+    except Exception:
+        pass
+
     # Get recent transactions for this account (Strict chronological order)
     transactions = Transaction.objects.filter(client_exchange=account).order_by("-created_at", "-id")[:20]
     
@@ -4823,6 +5545,116 @@ def exchange_account_detail(request, pk):
         'client_pnl': client_pnl,
         'final_share': final_share,
         'remaining_amount': remaining_amount,
+        'settlement_info': settlement_info,
+        'pending_amount': pending_amount,
+        'pending_card_amount': pending_card_amount,
+        'pending_card_direction': pending_card_direction,
+        'pending_card_source': pending_card_source,
+        'payment_transactions': payment_transactions,
+        'payments_paid': payments_paid,
+        'payments_received': payments_received,
+        'payments_net_paid_minus_received': payments_net_paid_minus_received,
+    })
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def pending_payment_settlement(request, pk, exchange_slug=None):
+    """
+    Client-payments settlement for ONE exchange account.
+
+    Uses per-account pending ledger when available.
+    The settlement amount cannot exceed the pending amount (abs).
+
+    Sign / direction:
+    - pending_display > 0: client needs to pay me (record RECEIVED)
+    - pending_display < 0: I need to pay client (record GIVEN)
+    """
+    from django.contrib import messages
+    from .models import PendingPaymentTransaction
+
+    account = get_object_or_404(ClientExchangeAccount, pk=pk, client__user=request.user)
+
+    # Client-payments settlement is STRICTLY against the per-account pending ledger.
+    # Dues should be generated only via /clients/settlements/ -> "Generate pending dues".
+    pending_display = int(account.pending_balance)  # +ve => client owes me, -ve => I owe client
+
+    max_amount = abs(int(pending_display))
+
+    if request.method == "POST":
+        amount_str = (request.POST.get("amount") or "").strip()
+        notes = (request.POST.get("notes") or "").strip()
+        try:
+            amount = int(amount_str)
+        except Exception:
+            amount = 0
+
+        if amount <= 0:
+            messages.error(request, "Amount must be greater than zero.")
+        elif max_amount == 0:
+            messages.info(request, "No pending amount to settle.")
+        elif amount > max_amount:
+            messages.error(request, f"Amount cannot be more than pending due ({max_amount}).")
+        else:
+            from django.db import transaction as db_transaction
+            from .models import Client
+
+            tx_type = "RECEIVED" if pending_display > 0 else "GIVEN"
+
+            with db_transaction.atomic():
+                locked_account = (
+                    ClientExchangeAccount.objects.select_for_update()
+                    .select_related("client")
+                    .get(pk=account.pk, client__user=request.user)
+                )
+                locked_client = Client.objects.select_for_update().get(pk=locked_account.client_id, user=request.user)
+
+                PendingPaymentTransaction.objects.create(
+                    client=locked_client,
+                    client_exchange=locked_account,
+                    amount=amount,
+                    type=tx_type,
+                    date=timezone.now(),
+                    notes=notes or f"Settlement - {locked_account.exchange.name}",
+                    created_by=request.user,
+                )
+                # Recalculate pending to ensure consistency (repairs any old drift).
+                try:
+                    # Same formula as settle_all_payments' rebuild:
+                    # dues(RECORD_PAYMENT markers) + GIVEN - RECEIVED
+                    from django.db.models import Sum
+                    dues_signed = (
+                        Transaction.objects.filter(
+                            client_exchange=locked_account,
+                            type="RECORD_PAYMENT",
+                            notes__icontains="dues generated",
+                        )
+                        .exclude(notes__icontains="auto-seeded")
+                        .exclude(notes__icontains="seeded from settlement page")
+                        .aggregate(total=Sum("amount"))["total"]
+                        or 0
+                    )
+                    paid = (
+                        PendingPaymentTransaction.objects.filter(client_exchange=locked_account, type="GIVEN")
+                        .aggregate(total=Sum("amount"))["total"]
+                        or 0
+                    )
+                    received = (
+                        PendingPaymentTransaction.objects.filter(client_exchange=locked_account, type="RECEIVED")
+                        .aggregate(total=Sum("amount"))["total"]
+                        or 0
+                    )
+                    locked_account.pending_balance = int(dues_signed) + int(paid) - int(received)
+                    locked_account.save(update_fields=["pending_balance"])
+                except Exception:
+                    pass
+            messages.success(request, f"Settlement recorded: {tx_type} {amount}.")
+            return redirect(reverse("payments_exchange_account_detail", args=[account.pk, account.exchange.get_slug()]))
+
+    return render(request, "core/pending_payments/settlement.html", {
+        "account": account,
+        "pending_display": pending_display,
+        "max_amount": max_amount,
     })
 
 
@@ -6560,37 +7392,112 @@ def logs_dashboard(request):
 @login_required
 def pending_payments_list(request):
     """List all clients and their pending balances."""
-    from .models import Client, PendingPaymentTransaction
+    from .models import Client, PendingPaymentTransaction, ClientExchangeAccount
+    from django.db.models import BigIntegerField, F, OuterRef, Subquery, Sum, Value
+    from django.db.models.functions import Coalesce
 
     # Get filter parameter
     balance_filter = request.GET.get('balance', 'all')  # 'all', 'owe_me', 'i_owe'
 
-    clients = Client.objects.filter(user=request.user).order_by('name')
+    # IMPORTANT:
+    # Client.pending_balance can be stale if account.pending_balance is updated directly
+    # (e.g. "generate pending dues" / recalculation flows).
+    # So we compute a live balance per client:
+    #   computed = sum(account.pending_balance) + legacy_given - legacy_received
+    # where legacy_* are PendingPaymentTransaction rows without client_exchange linkage.
+    accounts_pending_subq = (
+        ClientExchangeAccount.objects.filter(client=OuterRef("pk"))
+        .values("client")
+        .annotate(s=Coalesce(Sum("pending_balance"), Value(0)))
+        .values("s")
+    )
+    legacy_given_subq = (
+        PendingPaymentTransaction.objects.filter(
+            client=OuterRef("pk"), client_exchange__isnull=True, type="GIVEN"
+        )
+        .values("client")
+        .annotate(s=Coalesce(Sum("amount"), Value(0)))
+        .values("s")
+    )
+    legacy_received_subq = (
+        PendingPaymentTransaction.objects.filter(
+            client=OuterRef("pk"), client_exchange__isnull=True, type="RECEIVED"
+        )
+        .values("client")
+        .annotate(s=Coalesce(Sum("amount"), Value(0)))
+        .values("s")
+    )
+
+    base_clients = (
+        Client.objects.filter(user=request.user)
+        .annotate(
+            _accounts_pending=Coalesce(
+                Subquery(accounts_pending_subq, output_field=BigIntegerField()), Value(0)
+            ),
+            _legacy_given=Coalesce(
+                Subquery(legacy_given_subq, output_field=BigIntegerField()), Value(0)
+            ),
+            _legacy_received=Coalesce(
+                Subquery(legacy_received_subq, output_field=BigIntegerField()), Value(0)
+            ),
+        )
+        .annotate(
+            computed_pending_balance=F("_accounts_pending") + F("_legacy_given") - F("_legacy_received")
+        )
+        .order_by("name")
+    )
+
+    clients = base_clients
 
     # Apply balance filtering
+    # Convention:
+    # +pending_balance => client needs to pay me
+    # -pending_balance => I need to pay client
     if balance_filter == 'owe_me':
-        # Clients that owe money to me (positive balance)
-        clients = clients.filter(pending_balance__gt=0)
+        clients = clients.filter(computed_pending_balance__gt=0)
     elif balance_filter == 'i_owe':
-        # Clients I owe money to (negative balance)
-        clients = clients.filter(pending_balance__lt=0)
+        clients = clients.filter(computed_pending_balance__lt=0)
 
-    recent_transactions = PendingPaymentTransaction.objects.filter(
-        client__user=request.user
-    ).select_related('client').order_by('-date', '-id')[:20]
+    recent_transactions = (
+        PendingPaymentTransaction.objects.filter(client__user=request.user)
+        .select_related("client", "client_exchange", "client_exchange__exchange")
+        .order_by("-date", "-id")[:20]
+    )
 
-    # Calculate totals based on filter
+    # Calculate totals: receivable = sum(+), payable = abs(sum(-))
     if balance_filter == 'owe_me':
-        total_receivable = sum(clients.values_list('pending_balance', flat=True))
+        total_receivable = (
+            base_clients.filter(computed_pending_balance__gt=0).aggregate(
+                s=Coalesce(Sum("computed_pending_balance"), Value(0))
+            )["s"]
+            or 0
+        )
         total_payable = 0
     elif balance_filter == 'i_owe':
         total_receivable = 0
-        total_payable = abs(sum(clients.values_list('pending_balance', flat=True)))
+        total_payable = abs(
+            (
+                base_clients.filter(computed_pending_balance__lt=0).aggregate(
+                    s=Coalesce(Sum("computed_pending_balance"), Value(0))
+                )["s"]
+                or 0
+            )
+        )
     else:
-        # All clients - calculate from all clients
-        all_clients = Client.objects.filter(user=request.user)
-        total_receivable = sum(c.pending_balance for c in all_clients if c.pending_balance > 0)
-        total_payable = abs(sum(c.pending_balance for c in all_clients if c.pending_balance < 0))
+        total_receivable = (
+            base_clients.filter(computed_pending_balance__gt=0).aggregate(
+                s=Coalesce(Sum("computed_pending_balance"), Value(0))
+            )["s"]
+            or 0
+        )
+        total_payable = abs(
+            (
+                base_clients.filter(computed_pending_balance__lt=0).aggregate(
+                    s=Coalesce(Sum("computed_pending_balance"), Value(0))
+                )["s"]
+                or 0
+            )
+        )
 
     return render(request, 'core/pending_payments/list.html', {
         'clients': clients,
@@ -6612,9 +7519,12 @@ def pending_payment_transactions_list(request):
     search_version = request.GET.get('version', '').strip()
 
     # Base queryset
-    transactions = PendingPaymentTransaction.objects.filter(
-        client__user=request.user
-    ).select_related('client').prefetch_related('client__exchange_accounts__exchange').order_by('-date', '-id')
+    transactions = (
+        PendingPaymentTransaction.objects.filter(client__user=request.user)
+        .select_related('client', 'client_exchange', 'client_exchange__exchange')
+        .prefetch_related('client__exchange_accounts__exchange')
+        .order_by('-date', '-id')
+    )
 
     # Apply filters
     if search_name:
@@ -6650,6 +7560,9 @@ def pending_payment_transactions_list(request):
 @login_required
 def pending_payment_create(request):
     """Add a new GIVEN or RECEIVED transaction."""
+    from django.http import Http404
+    raise Http404()
+
     from .models import Client, PendingPaymentTransaction
     from django.contrib import messages
     
@@ -6735,11 +7648,16 @@ def pending_payment_delete(request, pk):
     """Delete a pending payment transaction."""
     from .models import PendingPaymentTransaction
     from django.contrib import messages
+    from django.utils.http import url_has_allowed_host_and_scheme
     
     transaction = get_object_or_404(PendingPaymentTransaction, pk=pk, client__user=request.user)
     
     if request.method == 'POST':
+        next_url = (request.POST.get("next") or request.GET.get("next") or "").strip()
         transaction.delete()
         messages.success(request, "Transaction deleted successfully")
+
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
+            return redirect(next_url)
         
     return redirect('pending_payments_list')

@@ -169,6 +169,12 @@ class Exchange(TimeStampedModel):
     def __str__(self):
         return self.name
 
+    def get_slug(self):
+        """URL-safe slug from code or name (e.g. 'dafa', 'diamond')."""
+        from django.utils.text import slugify
+        value = (self.code or self.name or "").strip()
+        return slugify(value) or str(self.pk)
+
 
 class ClientExchangeAccount(TimeStampedModel):
     """
@@ -178,7 +184,9 @@ class ClientExchangeAccount(TimeStampedModel):
     - funding: Total real money given to client
     - exchange_balance: Current balance on exchange
     
-    All other values (profit, loss, shares) are DERIVED, never stored.
+    NOTE (2026-03): We also persist share *amount caches* for reporting
+    (total share / company share). These are derived from balances +
+    configured percentages, but stored to make reporting fast and stable.
     """
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name='exchange_accounts')
     exchange = models.ForeignKey(Exchange, on_delete=models.CASCADE, related_name='client_accounts')
@@ -186,6 +194,12 @@ class ClientExchangeAccount(TimeStampedModel):
     # ONLY TWO MONEY VALUES STORED (BIGINT as per spec)
     funding = models.BigIntegerField(default=0, validators=[MinValueValidator(0)])
     exchange_balance = models.BigIntegerField(default=0, validators=[MinValueValidator(0)])
+
+    # Client-payments ledger balance scoped to THIS exchange account.
+    # Convention (same as Client.pending_balance):
+    # pending_balance = total_given - total_received
+    # +ve => client owes me, -ve => I owe client
+    pending_balance = models.BigIntegerField(default=0)
     
     # Partner percentage (INT as per spec) - kept for backward compatibility
     my_percentage = models.DecimalField(
@@ -195,17 +209,49 @@ class ClientExchangeAccount(TimeStampedModel):
         validators=[MinValueValidator(0), MaxValueValidator(100)],
         help_text="Your total percentage share (0-100, decimals allowed) - DEPRECATED: Use loss_share_percentage and profit_share_percentage"
     )
+
+    # Report-split percentages (stored on account for admin visibility).
+    # Invariant (soft): company_percentage + my_own_percentage == my_percentage
+    company_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Company percentage (part of My Total %)."
+    )
+    my_own_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="My own percentage (part of My Total %)."
+    )
     
     # MASKED SHARE SETTLEMENT SYSTEM: Separate loss and profit percentages
-    loss_share_percentage = models.IntegerField(
+    loss_share_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
         default=0,
         validators=[MinValueValidator(0), MaxValueValidator(100)],
-        help_text="Admin share percentage for losses (0-100). IMMUTABLE once data exists."
+        help_text="Admin share percentage for losses (0-100, decimals allowed). IMMUTABLE once data exists."
     )
-    profit_share_percentage = models.IntegerField(
+    profit_share_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
         default=0,
         validators=[MinValueValidator(0), MaxValueValidator(100)],
-        help_text="Admin share percentage for profits (0-100). Can change anytime, affects only future profits."
+        help_text="Admin share percentage for profits (0-100, decimals allowed). Can change anytime, affects only future profits."
+    )
+
+    # Persisted share amount caches (derived, but stored for reporting)
+    # Values are always >= 0, and represent amounts in the same units as funding/exchange_balance.
+    total_share_amount = models.BigIntegerField(
+        default=0,
+        help_text="Cached total share amount for current balances (>=0)."
+    )
+    company_share_amount = models.BigIntegerField(
+        default=0,
+        help_text="Cached company share amount (portion of total_share_amount, >=0)."
     )
     
     # CRITICAL FIX: Lock share at first compute per PnL cycle
@@ -216,7 +262,9 @@ class ClientExchangeAccount(TimeStampedModel):
         blank=True,
         help_text="Initial FinalShare locked at start of PnL cycle. Used for remaining calculation."
     )
-    locked_share_percentage = models.IntegerField(
+    locked_share_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
         default=0,
         null=True,
         blank=True,
@@ -344,6 +392,61 @@ class ClientExchangeAccount(TimeStampedModel):
         except Exception as e:
             print(f"Error in compute_my_share for account {self.id}: {e}")
             return 0
+
+    def _compute_share_amount_cache(self):
+        """
+        Compute (total_share_amount, company_share_amount) for current balances.
+
+        - total_share_amount: admin total share from masked-share system (always >= 0)
+        - company_share_amount: portion of total_share_amount based on stored split
+          (company_percentage / my_percentage). If company_percentage is 0, company share = 0.
+        """
+        from decimal import Decimal, ROUND_FLOOR
+
+        total_share = int(self.compute_my_share() or 0)
+        if total_share <= 0:
+            return 0, 0
+
+        # Default: no company split configured
+        my_total_pct = Decimal(str(self.my_percentage or 0))
+        friend_pct = Decimal(str(self.company_percentage or 0))
+
+        if my_total_pct <= 0 or friend_pct <= 0:
+            return total_share, 0
+
+        # Company share is proportional to friend% within my total%
+        ratio = friend_pct / my_total_pct
+        if ratio <= 0:
+            return total_share, 0
+        if ratio >= 1:
+            return total_share, total_share
+
+        company_share = int(
+            (Decimal(total_share) * ratio).to_integral_value(rounding=ROUND_FLOOR)
+        )
+        company_share = max(0, min(total_share, company_share))
+        return total_share, company_share
+
+    def save(self, *args, **kwargs):
+        """
+        Keep share caches consistent whenever balances/percentages change.
+        """
+        try:
+            total_share, company_share = self._compute_share_amount_cache()
+            self.total_share_amount = int(total_share)
+            self.company_share_amount = int(company_share)
+        except Exception:
+            # Never block saving core money values because cache failed
+            pass
+
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            # Ensure caches persist even when caller uses update_fields
+            uf = set(update_fields)
+            uf.update({"total_share_amount", "company_share_amount"})
+            kwargs["update_fields"] = list(uf)
+
+        super().save(*args, **kwargs)
     
     def compute_exact_share(self):
         """
@@ -591,30 +694,13 @@ class ClientExchangeAccount(TimeStampedModel):
         """
         MASKED SHARE SETTLEMENT SYSTEM - Validation
         
-        Prevents loss share % changes after data exists.
+        NOTE:
+        We do NOT block editing loss/profit share percentages anymore.
+        Historical settlement safety is enforced by cycle locking
+        (`locked_share_percentage`, `locked_initial_final_share`, etc.), so it’s
+        safe to allow edits for future cycles without rewriting past cycles.
         """
-        from django.core.exceptions import ValidationError
-        
-        # If this is an existing record (has pk), check if loss share % is being changed
-        if self.pk:
-            try:
-                old_instance = ClientExchangeAccount.objects.get(pk=self.pk)
-                # Check if loss share % is being changed
-                if old_instance.loss_share_percentage != self.loss_share_percentage:
-                    # Check if there are any transactions or settlements
-                    has_transactions = self.transactions.exists()
-                    has_settlements = self.settlements.exists()
-                    
-                    if has_transactions or has_settlements:
-                        raise ValidationError(
-                            "Loss share percentage cannot be changed after data exists. "
-                            "Current value: {}, Attempted value: {}".format(
-                                old_instance.loss_share_percentage,
-                                self.loss_share_percentage
-                            )
-                        )
-            except ClientExchangeAccount.DoesNotExist:
-                pass  # New instance, no validation needed
+        return
     
     def is_settled(self):
         """
@@ -629,78 +715,6 @@ class ClientExchangeAccount(TimeStampedModel):
         Use get_remaining_settlement_amount() == 0 to check if settlement is complete.
         """
         return self.compute_client_pnl() == 0
-
-
-class ClientExchangeReportConfig(TimeStampedModel):
-    """
-    REPORT CONFIG TABLE - ISOLATED
-    
-    Used ONLY for reports, NOT for system logic.
-    Stores friend/student share percentages.
-    """
-    client_exchange = models.OneToOneField(
-        ClientExchangeAccount,
-        on_delete=models.CASCADE,
-        related_name='report_config'
-    )
-    
-    # Report-only percentages (INT as per spec)
-    friend_percentage = models.DecimalField(
-        max_digits=5,
-        decimal_places=2,
-        default=0,
-        validators=[MinValueValidator(0)],
-        help_text="Friend/Student percentage (report only, decimals allowed)"
-    )
-    my_own_percentage = models.DecimalField(
-        max_digits=5,
-        decimal_places=2,
-        default=0,
-        validators=[MinValueValidator(0)],
-        help_text="Your own percentage (report only, decimals allowed)"
-    )
-    
-    class Meta:
-        verbose_name = "Report Configuration"
-        verbose_name_plural = "Report Configurations"
-    
-    def __str__(self):
-        return f"Report Config: {self.client_exchange}"
-    
-    def clean(self):
-        """Validation: friend_percentage + my_own_percentage = my_percentage"""
-        from django.core.exceptions import ValidationError
-        from decimal import Decimal
-        
-        if self.client_exchange:
-            my_total = Decimal(str(self.client_exchange.my_percentage))
-            friend_pct = Decimal(str(self.friend_percentage))
-            own_pct = Decimal(str(self.my_own_percentage))
-            friend_plus_own = friend_pct + own_pct
-            
-            # Use epsilon for floating point comparison
-            epsilon = Decimal('0.01')
-            if abs(friend_plus_own - my_total) >= epsilon:
-                raise ValidationError(
-                    f"Company % ({friend_pct:.2f}) + My Own % ({own_pct:.2f}) = {friend_plus_own:.2f}, "
-                    f"but My Total % = {my_total:.2f}. They must be equal."
-                )
-    
-    def compute_friend_share(self):
-        """
-        Friend share formula (report only)
-        Friend_Share = ABS(Client_PnL) × friend_percentage / 100
-        """
-        client_pnl = abs(self.client_exchange.compute_client_pnl())
-        return int((client_pnl * float(self.friend_percentage)) / 100)
-    
-    def compute_my_own_share(self):
-        """
-        My own share formula (report only)
-        My_Own_Share = ABS(Client_PnL) × my_own_percentage / 100
-        """
-        client_pnl = abs(self.client_exchange.compute_client_pnl())
-        return int((client_pnl * float(self.my_own_percentage)) / 100)
 
 
 class Settlement(TimeStampedModel):
@@ -889,6 +903,14 @@ class PendingPaymentTransaction(TimeStampedModel):
     ]
     
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name='pending_transactions')
+    client_exchange = models.ForeignKey(
+        ClientExchangeAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payment_transactions',
+        help_text="Optional link to a specific client-exchange account to keep payments separate per account."
+    )
     date = models.DateTimeField()
     type = models.CharField(max_length=10, choices=TYPE_CHOICES)
     amount = models.BigIntegerField(validators=[MinValueValidator(1)])
@@ -909,12 +931,14 @@ class PendingPaymentTransaction(TimeStampedModel):
         is_new = self.pk is None
         old_amount = 0
         old_type = None
+        old_client_exchange = None
         
         if not is_new:
             # Get the original transaction to reverse its effect
             old_instance = PendingPaymentTransaction.objects.get(pk=self.pk)
             old_amount = old_instance.amount
             old_type = old_instance.type
+            old_client_exchange = old_instance.client_exchange
 
         # Use atomic transaction to ensure balance consistency
         from django.db import transaction as db_transaction
@@ -925,12 +949,26 @@ class PendingPaymentTransaction(TimeStampedModel):
                     self.client.pending_balance -= old_amount
                 elif old_type == 'RECEIVED':
                     self.client.pending_balance += old_amount
+
+                if old_client_exchange:
+                    if old_type == 'GIVEN':
+                        old_client_exchange.pending_balance -= old_amount
+                    elif old_type == 'RECEIVED':
+                        old_client_exchange.pending_balance += old_amount
+                    old_client_exchange.save(update_fields=['pending_balance'])
             
             # 2. Apply new effect
             if self.type == 'GIVEN':
                 self.client.pending_balance += self.amount
             elif self.type == 'RECEIVED':
                 self.client.pending_balance -= self.amount
+
+            if self.client_exchange:
+                if self.type == 'GIVEN':
+                    self.client_exchange.pending_balance += self.amount
+                elif self.type == 'RECEIVED':
+                    self.client_exchange.pending_balance -= self.amount
+                self.client_exchange.save(update_fields=['pending_balance'])
             
             # 3. Save client and transaction
             self.client.save(update_fields=['pending_balance'])
@@ -947,6 +985,13 @@ class PendingPaymentTransaction(TimeStampedModel):
                 self.client.pending_balance -= self.amount
             elif self.type == 'RECEIVED':
                 self.client.pending_balance += self.amount
+
+            if self.client_exchange:
+                if self.type == 'GIVEN':
+                    self.client_exchange.pending_balance -= self.amount
+                elif self.type == 'RECEIVED':
+                    self.client_exchange.pending_balance += self.amount
+                self.client_exchange.save(update_fields=['pending_balance'])
             
             self.client.save(update_fields=['pending_balance'])
             super().delete(*args, **kwargs)

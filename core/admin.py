@@ -1,172 +1,127 @@
-"""
-Django admin configuration
-"""
+from decimal import Decimal
+
 from django.contrib import admin
 from django.core.exceptions import ValidationError
-from django.forms import ModelForm
-from .models import Client, Exchange, ClientExchangeAccount, ClientExchangeReportConfig, Transaction, Settlement
+from django.utils.html import format_html
+
+from .models import (
+    Client,
+    Exchange,
+    ClientExchangeAccount,
+    PendingPaymentTransaction,
+    Settlement,
+    Transaction,
+    EmailOTP,
+    MobileLog,
+)
 
 
-class ClientExchangeReportConfigInline(admin.StackedInline):
-    """Inline admin for report config"""
-    model = ClientExchangeReportConfig
+class ClientExchangeAccountInline(admin.TabularInline):
+    model = ClientExchangeAccount
     extra = 0
-    fields = ('friend_percentage', 'my_own_percentage')
-    
-    def get_formset(self, request, obj=None, **kwargs):
-        formset = super().get_formset(request, obj, **kwargs)
-        
-        class ReportConfigForm(formset.form):
-            def clean(self):
-                cleaned_data = super().clean()
-                if self.instance and self.instance.client_exchange:
-                    from decimal import Decimal
-                    friend_pct = cleaned_data.get('friend_percentage', 0) or Decimal('0')
-                    my_own_pct = cleaned_data.get('my_own_percentage', 0) or Decimal('0')
-                    my_total = self.instance.client_exchange.my_percentage
-                    
-                    # Convert to Decimal for precise comparison
-                    if isinstance(friend_pct, (int, float)):
-                        friend_pct = Decimal(str(friend_pct))
-                    if isinstance(my_own_pct, (int, float)):
-                        my_own_pct = Decimal(str(my_own_pct))
-                    if isinstance(my_total, (int, float)):
-                        my_total = Decimal(str(my_total))
-                    
-                    # Validate with epsilon for floating point comparison
-                    epsilon = Decimal('0.01')
-                    sum_percentages = friend_pct + my_own_pct
-                    if abs(sum_percentages - my_total) >= epsilon:
-                        raise ValidationError(
-                            f"Company % ({friend_pct:.2f}) + My Own % ({my_own_pct:.2f}) = {sum_percentages:.2f}, "
-                            f"but My Total % = {my_total:.2f}. They must be equal."
-                        )
-                return cleaned_data
-        
-        formset.form = ReportConfigForm
-        return formset
+    show_change_link = True
+    fields = (
+        "exchange",
+        "funding",
+        "exchange_balance",
+        "pending_balance",
+        "my_percentage",
+        "company_percentage",
+        "my_own_percentage",
+        "loss_share_percentage",
+        "profit_share_percentage",
+        "total_share_amount",
+        "company_share_amount",
+        "updated_at",
+    )
+    readonly_fields = ("updated_at",)
 
 
 @admin.register(Client)
 class ClientAdmin(admin.ModelAdmin):
-    list_display = ['name', 'code', 'referred_by', 'is_company_client', 'created_at']
-    list_filter = ['is_company_client', 'created_at']
-    search_fields = ['name', 'code', 'referred_by']
+    list_display = ("id", "name", "code", "user", "pending_balance", "is_company_client", "updated_at")
+    list_filter = ("is_company_client",)
+    search_fields = ("name", "code")
+    # CustomUser admin may not be registered; keep this simple.
+    inlines = (ClientExchangeAccountInline,)
 
 
 @admin.register(Exchange)
 class ExchangeAdmin(admin.ModelAdmin):
-    list_display = ['name', 'code', 'created_at']
-    search_fields = ['name', 'code']
+    list_display = ("id", "name", "code", "version_name", "updated_at")
+    search_fields = ("name", "code", "version_name")
 
 
 @admin.register(ClientExchangeAccount)
 class ClientExchangeAccountAdmin(admin.ModelAdmin):
-    list_display = ['client', 'exchange', 'funding', 'exchange_balance', 'loss_share_percentage', 'profit_share_percentage', 'computed_pnl', 'computed_share']
-    list_filter = ['exchange', 'created_at']
-    search_fields = ['client__name', 'exchange__name']
-    readonly_fields = ['computed_pnl', 'computed_share', 'settlement_status_derived', 'remaining_settlement', 'created_at', 'updated_at']
-    inlines = [ClientExchangeReportConfigInline]
-    
-    fieldsets = (
-        ('Account Information', {
-            'fields': ('client', 'exchange', 'my_percentage', 'loss_share_percentage', 'profit_share_percentage')
-        }),
-        ('Money Values (BIGINT)', {
-            'fields': ('funding', 'exchange_balance'),
-            'description': 'ONLY real money values stored here. All other values are DERIVED.'
-        }),
-        ('Computed Values (Read-Only)', {
-            'fields': ('computed_pnl', 'computed_share', 'remaining_settlement', 'settlement_status_derived'),
-            'description': 'These values are computed from funding and exchange_balance, never stored. Settlement status: PnL = 0 → Trading flat, Remaining = 0 → Settlement complete.'
-        }),
-        ('Timestamps', {
-            'fields': ('created_at', 'updated_at'),
-            'classes': ('collapse',)
-        }),
+    list_display = (
+        "id",
+        "client",
+        "exchange",
+        "funding",
+        "exchange_balance",
+        "computed_pnl_colored",
+        "my_percentage",
+        "company_percentage",
+        "my_own_percentage",
+        "total_share_amount",
+        "company_share_amount",
+        "updated_at",
     )
-    
-    def computed_pnl(self, obj):
-        """Display computed Client PnL"""
+    list_select_related = ("client", "exchange")
+    search_fields = ("client__name", "client__code", "exchange__name", "exchange__code")
+    list_filter = ("exchange",)
+    autocomplete_fields = ("client", "exchange")
+    readonly_fields = ("computed_pnl_colored",)
+
+    def computed_pnl_colored(self, obj: ClientExchangeAccount):
         pnl = obj.compute_client_pnl()
         if pnl == 0:
-            return "N.A"
-        color = "green" if pnl > 0 else "red"
-        return f'<span style="color: {color};">{pnl:,}</span>'
-    computed_pnl.short_description = "Client PnL (Computed)"
-    computed_pnl.allow_tags = True
-    
-    def computed_share(self, obj):
-        """Display computed My Share"""
-        pnl = obj.compute_client_pnl()
-        if pnl == 0:
-            return "N.A"
-        share = obj.compute_my_share()
-        return f'{share:,}'
-    computed_share.short_description = "My Share (Computed)"
-    
-    def remaining_settlement(self, obj):
-        """Display remaining settlement amount"""
-        remaining = obj.get_remaining_settlement_amount()
-        final_share = obj.compute_my_share()
-        if final_share == 0:
-            return "N.A (Zero Share)"
-        return f'{remaining:,} / {final_share:,}'
-    remaining_settlement.short_description = "Remaining Settlement"
-    
-    def settlement_status_derived(self, obj):
-        """
-        DERIVED settlement status (NOT stored)
-        
-        Rule: if Client_PnL == 0 → Trading flat (PnL zero from trading/settlement)
-        Rule: if Remaining = 0 → Settlement complete (all share paid)
-              else → Action required
-        """
-        pnl = obj.compute_client_pnl()
-        if pnl == 0:
-            return '<span style="color: green; font-weight: bold;">✓ Trading Flat (PnL = 0)</span>'
-        else:
-            return '<span style="color: orange; font-weight: bold;">⚠ Action Required</span>'
-    settlement_status_derived.short_description = "Settlement Status (Derived)"
-    settlement_status_derived.help_text = "Derived from Client_PnL. NOT stored in database."
-    settlement_status_derived.allow_tags = True
+            return "0"
+        color = "#16a34a" if pnl > 0 else "#dc2626"
+        return format_html('<span style="color: {}; font-weight: 700;">{}</span>', color, f"{pnl:,}")
+
+    computed_pnl_colored.short_description = "Client PnL"
+
+
+@admin.register(PendingPaymentTransaction)
+class PendingPaymentTransactionAdmin(admin.ModelAdmin):
+    list_display = ("id", "date", "client", "client_exchange", "type", "amount", "created_by")
+    list_select_related = ("client", "client_exchange", "created_by")
+    search_fields = ("client__name", "client__code", "notes", "client_exchange__exchange__name")
+    list_filter = ("type",)
+    autocomplete_fields = ("client", "client_exchange")
 
 
 @admin.register(Settlement)
 class SettlementAdmin(admin.ModelAdmin):
-    list_display = ['date', 'client_exchange', 'amount', 'notes']
-    list_filter = ['date']
-    search_fields = ['client_exchange__client__name', 'client_exchange__exchange__name', 'notes']
-    readonly_fields = ['created_at', 'updated_at']
-    date_hierarchy = 'date'
-
-
-@admin.register(ClientExchangeReportConfig)
-class ClientExchangeReportConfigAdmin(admin.ModelAdmin):
-    list_display = ['client_exchange', 'friend_percentage', 'my_own_percentage', 'computed_friend_share', 'computed_my_own_share']
-    readonly_fields = ['computed_friend_share', 'computed_my_own_share', 'created_at', 'updated_at']
-    
-    def computed_friend_share(self, obj):
-        """Display computed friend share (report only)"""
-        pnl = obj.client_exchange.compute_client_pnl()
-        if pnl == 0:
-            return "N.A"
-        return f'{obj.compute_friend_share():,}'
-    computed_friend_share.short_description = "Friend Share (Report)"
-    
-    def computed_my_own_share(self, obj):
-        """Display computed my own share (report only)"""
-        pnl = obj.client_exchange.compute_client_pnl()
-        if pnl == 0:
-            return "N.A"
-        return f'{obj.compute_my_own_share():,}'
-    computed_my_own_share.short_description = "My Own Share (Report)"
+    list_display = ("id", "date", "client_exchange", "amount", "notes")
+    list_select_related = ("client_exchange",)
+    search_fields = ("client_exchange__client__name", "client_exchange__exchange__name", "notes")
+    autocomplete_fields = ("client_exchange",)
+    date_hierarchy = "date"
 
 
 @admin.register(Transaction)
 class TransactionAdmin(admin.ModelAdmin):
-    list_display = ['date', 'client_exchange', 'type', 'amount', 'exchange_balance_after']
-    list_filter = ['type', 'date']
-    search_fields = ['client_exchange__client__name', 'client_exchange__exchange__name', 'notes']
-    readonly_fields = ['created_at', 'updated_at']
-    date_hierarchy = 'date'
+    list_display = ("id", "date", "client_exchange", "type", "amount")
+    list_select_related = ("client_exchange",)
+    list_filter = ("type",)
+    search_fields = ("notes", "client_exchange__client__name", "client_exchange__exchange__name")
+    autocomplete_fields = ("client_exchange",)
+    date_hierarchy = "date"
+
+
+@admin.register(EmailOTP)
+class EmailOTPAdmin(admin.ModelAdmin):
+    list_display = ("id", "email", "username", "otp_code", "is_verified", "expires_at", "created_at")
+    search_fields = ("email", "username")
+    list_filter = ("is_verified",)
+
+
+@admin.register(MobileLog)
+class MobileLogAdmin(admin.ModelAdmin):
+    list_display = ("id", "created_at", "level", "tag", "user")
+    search_fields = ("tag", "message", "user__username")
+    list_filter = ("level", "tag")
+    # CustomUser admin may not be registered; keep this simple.

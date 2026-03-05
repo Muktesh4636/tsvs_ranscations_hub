@@ -9,11 +9,6 @@
         <h1>💸 Payment Transactions</h1>
         <p class="text-muted">All money given to and received from clients</p>
     </div>
-    <div>
-        <a href="{% url 'pending_payment_create' %}" class="btn btn-primary">
-            <span>+ Add Transaction</span>
-        </a>
-    </div>
 </div>
 
 <!-- Search Form -->
@@ -61,13 +56,18 @@
             <tbody>
                 {% for tx in transactions %}
                 {% with exchange_accounts=tx.client.exchange_accounts.all %}
-                <tr style="border-bottom: 1px solid var(--border); cursor: pointer;" onclick="window.location='{% if exchange_accounts %}{% url 'payments_exchange_account_detail' exchange_accounts.0.pk %}{% else %}{% url 'payments_client_detail' tx.client.pk %}{% endif %}'">
+                <tr style="border-bottom: 1px solid var(--border); cursor: pointer;" onclick="window.location='{% if tx.client_exchange %}{% url 'payments_exchange_account_detail_redirect' tx.client_exchange.pk %}{% elif exchange_accounts %}{% url 'payments_exchange_account_detail_redirect' exchange_accounts.0.pk %}{% else %}{% url 'payments_client_detail' tx.client.pk %}{% endif %}'">
                     <td style="padding: 12px; font-size: 13px;">{{ tx.date|date:"d M, Y H:i" }}</td>
                     <td style="padding: 12px;">
                         <div style="font-weight: 500;">{{ tx.client.name }}</div>
                         {% if tx.client.code %}
                         <div style="font-size: 11px; color: var(--muted);">Code: {{ tx.client.code }}</div>
                         {% endif %}
+                        {% if tx.client_exchange %}
+                        <div style="font-size: 11px; color: var(--muted);">
+                            {{ tx.client_exchange.exchange.name }}{% if tx.client_exchange.exchange.version_name %} ({{ tx.client_exchange.exchange.version_name }}){% endif %}
+                        </div>
+                        {% else %}
                         {% with exchanges=tx.client.exchange_accounts.all %}
                         {% if exchanges %}
                         <div style="font-size: 11px; color: var(--muted);">
@@ -77,10 +77,21 @@
                         </div>
                         {% endif %}
                         {% endwith %}
+                        {% endif %}
                     </td>
                     <td style="padding: 12px;">
-                        <span style="padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; {% if tx.type == 'GIVEN' %}background: #dcfce7; color: var(--success);{% else %}background: #fee2e2; color: var(--danger);{% endif %}">
-                            {{ tx.type }}
+                        <span style="padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; {% if tx.type == 'RECEIVED' %}background: #dcfce7; color: var(--success);{% else %}background: #fee2e2; color: var(--danger);{% endif %}">
+                            {% with n=tx.notes|default:""|lower %}
+                                {% if 'settle all payments' in n %}
+                                    Settlement
+                                {% elif tx.type == 'GIVEN' %}
+                                    Paid
+                                {% elif tx.type == 'RECEIVED' %}
+                                    Received
+                                {% else %}
+                                    {{ tx.type }}
+                                {% endif %}
+                            {% endwith %}
                         </span>
                     </td>
                     <td style="padding: 12px; text-align: right; font-weight: 600;">₹{{ tx.amount }}</td>

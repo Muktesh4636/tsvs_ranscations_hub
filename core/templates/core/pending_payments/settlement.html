@@ -1,0 +1,57 @@
+{% extends "core/base.html" %}
+{% load math_filters %}
+
+{% block title %}Settlement · {{ account.client.name }} - {{ account.exchange.name }}{% endblock %}
+{% block page_title %}Settlement{% endblock %}
+{% block page_subtitle %}{{ account.client.name }} · {{ account.exchange.name }}{% endblock %}
+
+{% block page_actions %}
+<a href="{% url 'payments_exchange_account_detail' account.pk account.exchange.get_slug %}" class="btn">Back</a>
+{% endblock %}
+
+{% block content %}
+<div style="background: var(--bg-content); border-radius: 12px; padding: 20px; border: 1px solid var(--border); margin-bottom: 20px;">
+    <div style="font-size: 13px; color: var(--muted);">Pending amount</div>
+    {% if pending_display == 0 %}
+        <div style="font-size: 26px; font-weight: 700; color: var(--muted);">₹0</div>
+        <div style="font-size: 13px; color: var(--muted); margin-top: 6px;">Settled</div>
+    {% else %}
+        <div style="font-size: 26px; font-weight: 700;" class="{% if pending_display > 0 %}positive{% else %}negative{% endif %}">
+            {{ pending_display|abs|currency_inr }}
+        </div>
+        <div style="font-size: 13px; margin-top: 6px; color: var(--muted);">
+            {% if pending_display > 0 %}
+                Client is in loss (client owes you). Suggested: record RECEIVED to reduce it.
+            {% else %}
+                Client is in profit (you owe client). Suggested: record GIVEN to reduce it.
+            {% endif %}
+        </div>
+    {% endif %}
+</div>
+
+<div style="background: var(--bg-content); border-radius: 12px; padding: 20px; border: 1px solid var(--border);">
+    <form method="post" style="display: grid; gap: 12px; max-width: 520px;">
+        {% csrf_token %}
+
+        <div>
+            <label style="display:block; font-size: 13px; color: var(--muted); margin-bottom: 6px;">Amount</label>
+            <input class="field-input" name="amount" type="number" min="1" max="{{ max_amount }}" value="{{ max_amount }}" {% if max_amount == 0 %}disabled{% endif %} />
+        </div>
+
+        <div>
+            <label style="display:block; font-size: 13px; color: var(--muted); margin-bottom: 6px;">Notes (optional)</label>
+            <input class="field-input" name="notes" type="text" placeholder="Settlement note..." {% if max_amount == 0 %}disabled{% endif %} />
+        </div>
+
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <button type="submit" class="btn btn-primary" {% if max_amount == 0 %}disabled{% endif %}>
+                Record settlement
+            </button>
+            <div style="font-size: 12px; color: var(--muted);">
+                Max allowed: {{ max_amount|currency_inr }}.
+            </div>
+        </div>
+    </form>
+</div>
+{% endblock %}
+

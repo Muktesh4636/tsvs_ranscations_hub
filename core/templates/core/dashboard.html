@@ -6,6 +6,30 @@
 {% block page_subtitle %}Live overview of turnover, profit, and settlements{% endblock %}
 
 {% block content %}
+{% if request.resolver_match.url_name == 'payments_dashboard' %}
+<div class="card-grid">
+    <div class="card">
+        <div class="card-title">Net Pending</div>
+        <div class="card-value {% if payments_net_pending > 0 %}positive{% elif payments_net_pending < 0 %}negative{% endif %}">
+            {{ payments_net_pending|default:0|currency_inr }}
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-title">Receivable</div>
+        <div class="card-value positive">{{ payments_pending_receivable|default:0|currency_inr }}</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Payable</div>
+        <div class="card-value negative">{{ payments_pending_payable|default:0|currency_inr }}</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Net Profit (Received − Paid)</div>
+        <div class="card-value {% if payments_net_profit > 0 %}positive{% elif payments_net_profit < 0 %}negative{% endif %}">
+            {{ payments_net_profit|default:0|currency_inr }}
+        </div>
+    </div>
+</div>
+{% else %}
 <div class="card-grid">
     <div class="card">
         <div class="card-title">Total Clients</div>
@@ -26,7 +50,43 @@
         </div>
     </div>
 </div>
+{% endif %}
 
+{% if request.resolver_match.url_name == 'payments_dashboard' %}
+<div style="background: var(--bg-content); border-radius: 12px; padding: 32px; border: 1px solid var(--border); margin-top: 24px;">
+    <h3 style="font-size: 22px; font-weight: 600; margin-bottom: 20px;">Recent Payment Transactions</h3>
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Client</th>
+                    <th>Exchange</th>
+                    <th>Type</th>
+                    <th>Amount</th>
+                    <th>Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for tx in recent_payment_transactions %}
+                <tr style="cursor: pointer;" onclick="window.location='{% if tx.client_exchange %}{% url 'payments_exchange_account_detail_redirect' tx.client_exchange.pk %}{% else %}{% url 'payments_client_detail' tx.client.pk %}{% endif %}'">
+                    <td>{{ tx.date|date:"M d, Y H:i" }}</td>
+                    <td>{{ tx.client.name }}</td>
+                    <td>{% if tx.client_exchange %}{{ tx.client_exchange.exchange.name }}{% else %}—{% endif %}</td>
+                    <td>
+                        {% if tx.type == 'GIVEN' %}Paid{% elif tx.type == 'RECEIVED' %}Received{% else %}{{ tx.type }}{% endif %}
+                    </td>
+                    <td>{{ tx.amount|currency_inr }}</td>
+                    <td>{{ tx.notes|default:"—" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6">No payment transactions</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
 {% if recent_accounts %}
 <div style="background: var(--bg-content); border-radius: 12px; padding: 32px; border: 1px solid var(--border); margin-top: 24px;">
     <h3 style="font-size: 22px; font-weight: 600; margin-bottom: 20px;">Recent Accounts</h3>
@@ -69,7 +129,7 @@
                         </td>
                         <td>
                             <div style="display: flex; gap: 8px;">
-                                <a href="{% if request.resolver_match.url_name == 'payments_dashboard' %}{% url 'payments_exchange_account_detail' account.pk %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" class="btn btn-sm">View</a>
+                                <a href="{% if request.resolver_match.url_name == 'payments_dashboard' %}{% url 'payments_exchange_account_detail_redirect' account.pk %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" class="btn btn-sm">View</a>
                             </div>
                         </td>
                     </tr>
@@ -79,6 +139,7 @@
         </table>
     </div>
 </div>
+{% endif %}
 {% endif %}
 
 {% endblock %}

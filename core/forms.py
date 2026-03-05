@@ -5,7 +5,7 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from decimal import Decimal
-from .models import Client, Exchange, ClientExchangeAccount, ClientExchangeReportConfig, Transaction, EmailOTP
+from .models import Client, Exchange, ClientExchangeAccount, Transaction, EmailOTP
 
 User = get_user_model()
 
@@ -107,39 +107,16 @@ class ClientExchangeLinkForm(forms.ModelForm):
         return cleaned_data
     
     def save(self, commit=True):
-        instance = super().save(commit=commit)
+        instance = super().save(commit=False)
         
-        # Save report config if percentages provided
+        # Store split percentages directly on the account (single-table storage)
+        friend_pct = self.cleaned_data.get("friend_percentage") or Decimal("0")
+        my_own_pct = self.cleaned_data.get("my_own_percentage") or Decimal("0")
+        instance.company_percentage = friend_pct
+        instance.my_own_percentage = my_own_pct
+
         if commit:
-            # Get values from cleaned_data (should already be Decimal from clean() method)
-            friend_pct_raw = self.cleaned_data.get('friend_percentage')
-            my_own_pct_raw = self.cleaned_data.get('my_own_percentage')
-            
-            # Ensure values are Decimal, not int or None
-            if friend_pct_raw is None:
-                friend_pct = Decimal('0')
-            elif isinstance(friend_pct_raw, Decimal):
-                friend_pct = friend_pct_raw
-            else:
-                # Convert string/int/float to Decimal, preserving decimal precision
-                friend_pct = Decimal(str(friend_pct_raw))
-                
-            if my_own_pct_raw is None:
-                my_own_pct = Decimal('0')
-            elif isinstance(my_own_pct_raw, Decimal):
-                my_own_pct = my_own_pct_raw
-            else:
-                # Convert string/int/float to Decimal, preserving decimal precision
-                my_own_pct = Decimal(str(my_own_pct_raw))
-            
-            if friend_pct > 0 or my_own_pct > 0:
-                ClientExchangeReportConfig.objects.update_or_create(
-                    client_exchange=instance,
-                    defaults={
-                        'friend_percentage': friend_pct,
-                        'my_own_percentage': my_own_pct,
-                    }
-                )
+            instance.save()
         
         return instance
 

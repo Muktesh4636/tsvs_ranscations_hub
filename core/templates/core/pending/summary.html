@@ -32,13 +32,16 @@
         You Owe Clients
     </button>
     </div>
-        <div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
             <a href="{% url 'export_pending_csv' %}{% if search_query %}?search={{ search_query|urlencode }}{% endif %}" class="btn btn-primary" style="background: var(--success);">
                 📥 Download CSV
             </a>
-            <button onclick="shareViaWhatsApp('{% url 'export_pending_csv' %}{% if search_query %}?search={{ search_query|urlencode }}{% endif %}')" class="btn btn-success" style="background: #25d366; border: none; margin-left: 8px;">
-                📱 WhatsApp
-            </button>
+            <form method="post" action="{% url 'settle_all_payments' %}" style="display: inline;" onsubmit="return confirm('Generate pending dues for every account? This will NOT record real payments. You will record real payments in Client Payments screens.');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-primary" style="background: var(--accent);">
+                    ✓ Generate pending dues
+                </button>
+            </form>
         </div>
     </div>
         </div>
@@ -117,15 +120,10 @@
                     <td>{{ item.share_percentage }}%</td>
                     <td>
                         {% if not item.show_na %}
-                            <a href="{% url 'record_payment' item.account.pk %}?redirect_to=pending_summary" class="btn btn-sm btn-primary" style="margin-right: 4px;">Record Payment</a>
+                            <a href="{% url 'pending_payment_settlement' item.account.pk item.account.exchange.get_slug %}" class="btn btn-sm btn-primary" style="margin-right: 4px;">Record Real Payment</a>
                         {% endif %}
-                        <a href="{% if request.resolver_match.url_name == 'payments_settlements_list' %}{% url 'payments_exchange_account_detail' item.account.pk %}{% else %}{% url 'exchange_account_detail' item.account.pk %}{% endif %}" class="btn btn-sm" style="margin-right: 4px;">View Account</a>
+                        <a href="{% if request.resolver_match.url_name == 'payments_settlements_list' %}{% url 'payments_exchange_account_detail' item.account.pk item.account.exchange.get_slug %}{% else %}{% url 'exchange_account_detail' item.account.pk %}{% endif %}" class="btn btn-sm" style="margin-right: 4px;">View Account</a>
                         <a href="{% url 'export_client_pending_csv' item.client.pk %}" class="btn btn-sm" style="background: var(--success); color: white;" title="Download CSV for {{ item.client.name }}">📥 CSV</a>
-                        {% ifchanged item.client.pk %}
-                            <button onclick="shareClientViaWhatsApp('{{ item.client.name }}', '{% url 'export_client_pending_csv' item.client.pk %}')" class="btn btn-sm" style="background: #25D366; color: white; margin-left: 4px;" title="Send WhatsApp to {{ item.client.name }}">
-                                🟢 WhatsApp
-                            </button>
-                        {% endifchanged %}
                     </td>
                 </tr>
             {% endfor %}
@@ -201,15 +199,10 @@
                     <td>{{ item.share_percentage }}%</td>
                     <td>
                         {% if not item.show_na %}
-                            <a href="{% url 'record_payment' item.account.pk %}?redirect_to=pending_summary" class="btn btn-sm btn-primary" style="margin-right: 4px;">Record Payment</a>
+                            <a href="{% url 'pending_payment_settlement' item.account.pk item.account.exchange.get_slug %}" class="btn btn-sm btn-primary" style="margin-right: 4px;">Record Real Payment</a>
                         {% endif %}
-                        <a href="{% if request.resolver_match.url_name == 'payments_settlements_list' %}{% url 'payments_exchange_account_detail' item.account.pk %}{% else %}{% url 'exchange_account_detail' item.account.pk %}{% endif %}" class="btn btn-sm" style="margin-right: 4px;">View Account</a>
+                        <a href="{% if request.resolver_match.url_name == 'payments_settlements_list' %}{% url 'payments_exchange_account_detail' item.account.pk item.account.exchange.get_slug %}{% else %}{% url 'exchange_account_detail' item.account.pk %}{% endif %}" class="btn btn-sm" style="margin-right: 4px;">View Account</a>
                         <a href="{% url 'export_client_pending_csv' item.client.pk %}" class="btn btn-sm" style="background: var(--success); color: white;" title="Download CSV for {{ item.client.name }}">📥 CSV</a>
-                        {% ifchanged item.client.pk %}
-                            <button onclick="shareClientViaWhatsApp('{{ item.client.name }}', '{% url 'export_client_pending_csv' item.client.pk %}')" class="btn btn-sm" style="background: #25D366; color: white; margin-left: 4px;" title="Send WhatsApp to {{ item.client.name }}">
-                                🟢 WhatsApp
-                            </button>
-                        {% endifchanged %}
                     </td>
                 </tr>
             {% endfor %}
@@ -247,84 +240,6 @@ function showSection(section) {
         document.getElementById('btn-you-owe').classList.add('btn-primary');
         document.getElementById('btn-you-owe').style.background = 'var(--accent)';
     }
-}
-
-function shareViaWhatsApp(csvUrl) {
-    // Create a message for WhatsApp
-    const message = encodeURIComponent("Please find the settlements report attached.");
-
-    // WhatsApp URL with phone number
-    const whatsappUrl = `https://wa.me/9182351381?text=${message}`;
-
-    // First download the CSV file
-    const link = document.createElement('a');
-    link.href = csvUrl;
-    link.download = 'pending_payments.csv';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    // Then open WhatsApp after a short delay to allow download to start
-    setTimeout(() => {
-        window.open(whatsappUrl, '_blank');
-    }, 1000);
-
-    // Show a helpful message
-    alert('CSV file has been downloaded. Please attach it manually to your WhatsApp message.');
-}
-
-function shareClientViaWhatsApp(clientName, csvUrl) {
-    // Check if Web Share API is supported (mostly mobile)
-    if (navigator.share && navigator.canShare) {
-        fetch(csvUrl)
-            .then(response => response.blob())
-            .then(blob => {
-                const file = new File([blob], `${clientName}_pending_payments.csv`, { type: 'text/csv' });
-                if (navigator.canShare({ files: [file] })) {
-                    navigator.share({
-                        files: [file],
-                        title: `Pending Report: ${clientName}`,
-                        text: `Hello, here is the pending payment report for ${clientName}.`
-                    }).catch(error => {
-                        console.error('Error sharing:', error);
-                        fallbackShare(clientName, csvUrl);
-                    });
-                } else {
-                    fallbackShare(clientName, csvUrl);
-                }
-            })
-            .catch(error => {
-                console.error('Error fetching CSV:', error);
-                fallbackShare(clientName, csvUrl);
-            });
-    } else {
-        // Fallback for desktop/unsupported browsers
-        fallbackShare(clientName, csvUrl);
-    }
-}
-
-function fallbackShare(clientName, csvUrl) {
-    // Create a message for WhatsApp
-    const message = encodeURIComponent(`Hello, here is the pending payment report for ${clientName}.`);
-
-    // WhatsApp URL with phone number
-    const whatsappUrl = `https://wa.me/9182351381?text=${message}`;
-
-    // First download the CSV file
-    const link = document.createElement('a');
-    link.href = csvUrl;
-    link.download = `${clientName}_pending_payments.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    // Then open WhatsApp after a short delay to allow download to start
-    setTimeout(() => {
-        window.open(whatsappUrl, '_blank');
-    }, 1000);
-
-    // Show a helpful message
-    alert(`CSV file for ${clientName} has been downloaded. Please attach it manually to your WhatsApp message.`);
 }
 </script>
 {% endblock %}

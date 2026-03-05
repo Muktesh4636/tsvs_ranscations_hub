@@ -6,6 +6,11 @@
 
 {% block content %}
 <div style="background: var(--bg-content); border-radius: 8px; padding: 24px; border: 1px solid var(--border); max-width: 600px;">
+    {% if error %}
+    <div style="background: #fee2e2; border: 1px solid #ef4444; color: #7f1d1d; padding: 12px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; font-weight: 600;">
+        {{ error }}
+    </div>
+    {% endif %}
     <form method="post">
         {% csrf_token %}
         <div class="form-row">
@@ -28,31 +33,29 @@
             <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">Your total percentage share (0-100, decimals allowed). This will be used for both loss and profit calculations.</div>
         </div>
         
-        {% if report_config %}
         <div style="border-top: 1px solid var(--border); margin: 20px 0; padding-top: 20px;">
-            <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px;">Report Configuration (Optional)</h4>
+            <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px;">Report Split</h4>
             
             <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; padding: 12px; margin-bottom: 16px;">
                 <div style="font-size: 13px; color: #075985; font-weight: 600; margin-bottom: 4px;">⚠️ Validation Rule:</div>
                 <div style="font-size: 13px; color: #075985;">Company % + My Own % <strong>must equal</strong> My Total %</div>
                 <div id="percentage-summary" style="font-size: 13px; color: #0c4a6e; margin-top: 8px; font-weight: 600;">
-                    Current: Company % (<span id="friend-display">{{ report_config.friend_percentage|default:0 }}</span>) + My Own % (<span id="myown-display">{{ report_config.my_own_percentage|default:0 }}</span>) = <span id="current-sum">0</span> | My Total %: <span id="my-total-display">{{ client_exchange.my_percentage|default:0 }}</span>
+                    Current: Company % (<span id="friend-display">{{ client_exchange.company_percentage|default:0 }}</span>) + My Own % (<span id="myown-display">{{ client_exchange.my_own_percentage|default:0 }}</span>) = <span id="current-sum">0</span> | My Total %: <span id="my-total-display">{{ client_exchange.my_percentage|default:0 }}</span>
                 </div>
             </div>
             
             <div class="form-row">
                 <label class="field-label">Company Percentage</label>
-                <input type="number" name="friend_percentage" id="friend_percentage" class="field-input" min="0" max="100" step="0.01" value="{{ report_config.friend_percentage }}">
-                <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">Company percentage (report only, decimals allowed). Must sum with "My Own %" to equal "My Total %".</div>
+                <input type="number" name="friend_percentage" id="friend_percentage" class="field-input" min="0" max="100" step="0.01" value="{{ client_exchange.company_percentage|default:0 }}">
+                <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">Company percentage (decimals allowed). Must sum with "My Own %" to equal "My Total %".</div>
             </div>
             
             <div class="form-row">
                 <label class="field-label">My Own Percentage</label>
-                <input type="number" name="my_own_percentage" id="my_own_percentage" class="field-input" min="0" max="100" step="0.01" value="{{ report_config.my_own_percentage }}">
-                <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">Your own percentage (report only, decimals allowed). Company % + My Own % = My Total %.</div>
+                <input type="number" name="my_own_percentage" id="my_own_percentage" class="field-input" min="0" max="100" step="0.01" value="{{ client_exchange.my_own_percentage|default:0 }}">
+                <div style="font-size: 12px; color: var(--muted); margin-top: 4px;">Your own percentage (decimals allowed). Company % + My Own % = My Total %.</div>
             </div>
         </div>
-        {% endif %}
         
         <div style="display: flex; gap: 12px; margin-top: 20px;">
             <button type="submit" class="btn btn-primary" id="submit-btn">Save Changes</button>
@@ -63,7 +66,6 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    {% if report_config %}
     const myTotalInput = document.getElementById('my_percentage');
     const friendInput = document.getElementById('friend_percentage');
     const myOwnInput = document.getElementById('my_own_percentage');
@@ -287,7 +289,6 @@ document.addEventListener('DOMContentLoaded', function() {
             return false;
         }
     });
-    {% endif %}
     
     {% if client_type == 'company' %}
     function validateCompanyShare() {

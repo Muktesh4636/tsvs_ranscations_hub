@@ -9,11 +9,6 @@
         <h1>💸 Pending Payments</h1>
         <p class="text-muted">Manage money given to and received from clients</p>
     </div>
-    <div>
-        <a href="{% url 'pending_payment_create' %}" class="btn btn-primary">
-            <span>+ Add Transaction</span>
-        </a>
-    </div>
 </div>
 
 <!-- Summary Cards -->
@@ -57,12 +52,12 @@
                             <div style="font-weight: 500;">{{ client.name }}</div>
                             <div style="font-size: 11px; color: var(--muted);">{{ client.code|default:"" }}</div>
                         </td>
-                        <td style="padding: 12px; text-align: right; font-weight: 600; {% if client.pending_balance > 0 %}color: var(--success);{% elif client.pending_balance < 0 %}color: var(--danger);{% endif %}">
-                            ₹{{ client.pending_balance|abs }}
+                        <td style="padding: 12px; text-align: right; font-weight: 600; {% if client.computed_pending_balance > 0 %}color: var(--success);{% elif client.computed_pending_balance < 0 %}color: var(--danger);{% endif %}">
+                            ₹{{ client.computed_pending_balance|abs }}
                             <div style="font-size: 10px; font-weight: normal;">
-                                {% if client.pending_balance > 0 %}
+                                {% if client.computed_pending_balance > 0 %}
                                     Client owes me
-                                {% elif client.pending_balance < 0 %}
+                                {% elif client.computed_pending_balance < 0 %}
                                     I owe client
                                 {% else %}
                                     Settled
@@ -79,5 +74,7 @@
             </table>
         </div>
     </div>
+
+    {# Recent Payment Transactions removed by request #}
 </div>
 {% endblock %}

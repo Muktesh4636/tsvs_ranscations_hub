@@ -10,7 +10,7 @@ from django.http import HttpResponse
 from decimal import Decimal
 from datetime import date, timedelta
 import csv
-from .models import Client, Exchange, ClientExchangeAccount, Transaction, ClientExchangeReportConfig, MobileLog
+from .models import Client, Exchange, ClientExchangeAccount, Transaction, MobileLog
 from .serializers import (
     ClientSerializer, ExchangeSerializer,
     ClientExchangeAccountSerializer, TransactionSerializer
@@ -38,22 +38,33 @@ def api_root(request):
 def api_account_report_config(request, account_id):
     try:
         account = ClientExchangeAccount.objects.get(id=account_id, client__user=request.user)
-        config, created = ClientExchangeReportConfig.objects.get_or_create(client_exchange=account)
         
         if request.method == 'POST':
-            friend_pct = Decimal(str(request.data.get('friend_percentage', config.friend_percentage)))
-            my_own_pct = Decimal(str(request.data.get('my_own_percentage', config.my_own_percentage)))
-            
-            # Update values
-            config.friend_percentage = friend_pct
-            config.my_own_percentage = my_own_pct
-            config.save()
+            friend_pct_raw = request.data.get("friend_percentage", None)
+            my_own_pct_raw = request.data.get("my_own_percentage", None)
+
+            my_total = Decimal(str(account.my_percentage or 0))
+            friend_pct = Decimal(str(friend_pct_raw)) if friend_pct_raw is not None and str(friend_pct_raw).strip() != "" else Decimal(str(account.company_percentage or 0))
+            my_own_pct = Decimal(str(my_own_pct_raw)) if my_own_pct_raw is not None and str(my_own_pct_raw).strip() != "" else Decimal(str(account.my_own_percentage or 0))
+
+            # Normalize so Company% + MyOwn% == MyTotal%
+            epsilon = Decimal("0.01")
+            if my_total > 0 and abs((friend_pct + my_own_pct) - my_total) >= epsilon:
+                if friend_pct > my_total:
+                    friend_pct = my_total
+                    my_own_pct = Decimal("0")
+                else:
+                    my_own_pct = my_total - friend_pct
+
+            account.company_percentage = friend_pct
+            account.my_own_percentage = my_own_pct
+            account.save(update_fields=["company_percentage", "my_own_percentage"])
             return Response({'status': 'success'})
             
         return Response({
-            'friend_percentage': float(config.friend_percentage),
-            'my_own_percentage': float(config.my_own_percentage),
-            'my_total_percentage': float(account.profit_share_percentage) # Use profit share as total
+            'friend_percentage': float(account.company_percentage or 0),
+            'my_own_percentage': float(account.my_own_percentage or 0),
+            'my_total_percentage': float(account.my_percentage or 0)
         })
     except Exception as e:
         return Response({'error': str(e)}, status=400)
@@ -365,6 +376,7 @@ def api_update_balance(request, account_id):
         new_balance = int(Decimal(amount_raw.replace(',', '')))
         notes = request.data.get('notes', '')
         
+        exchange_before = account.exchange_balance
         account.exchange_balance = new_balance
         account.save()
         
@@ -372,7 +384,7 @@ def api_update_balance(request, account_id):
             client_exchange=account,
             date=timezone.now(),
             type='UPDATE_BALANCE',
-            amount=new_balance,
+            amount=abs(int(new_balance) - int(exchange_before)),
             funding_after=account.funding,
             exchange_balance_after=account.exchange_balance,
             notes=notes
@@ -650,21 +662,17 @@ def api_reports_summary(request):
     friend_total_share = 0
     
     for acc in accounts:
-        try:
-            config = ClientExchangeReportConfig.objects.get(client_exchange=acc)
-            acc_my_share = acc.compute_my_share()
-            if acc_my_share > 0:
-                # Calculate ratio based on config
-                total_config_pct = float(config.my_own_percentage + config.friend_percentage)
-                if total_config_pct > 0:
-                    my_own_total_share += int((acc_my_share * float(config.my_own_percentage)) / total_config_pct)
-                    friend_total_share += int((acc_my_share * float(config.friend_percentage)) / total_config_pct)
-                else:
-                    # Default if no config
-                    my_own_total_share += acc_my_share
-        except ClientExchangeReportConfig.DoesNotExist:
-            # Default if no config
-            my_own_total_share += acc.compute_my_share()
+        acc_my_share = acc.compute_my_share()
+        if acc_my_share <= 0:
+            continue
+        my_total = Decimal(str(acc.my_percentage or 0))
+        if my_total <= 0:
+            my_own_total_share += acc_my_share
+            continue
+        my_own_pct = Decimal(str(acc.my_own_percentage or 0))
+        friend_pct = Decimal(str(acc.company_percentage or 0))
+        my_own_total_share += int((Decimal(acc_my_share) * (my_own_pct / my_total)))
+        friend_total_share += int((Decimal(acc_my_share) * (friend_pct / my_total)))
 
     # Recent Daily Performance (last 7 days)
     daily_stats = []
@@ -772,18 +780,17 @@ def api_export_reports_csv(request):
     friend_total_share = 0
     
     for acc in accounts:
-        try:
-            config = ClientExchangeReportConfig.objects.get(client_exchange=acc)
-            acc_my_share = acc.compute_my_share()
-            if acc_my_share > 0:
-                total_config_pct = float(config.my_own_percentage + config.friend_percentage)
-                if total_config_pct > 0:
-                    my_own_total_share += int((acc_my_share * float(config.my_own_percentage)) / total_config_pct)
-                    friend_total_share += int((acc_my_share * float(config.friend_percentage)) / total_config_pct)
-                else:
-                    my_own_total_share += acc_my_share
-        except ClientExchangeReportConfig.DoesNotExist:
-            my_own_total_share += acc.compute_my_share()
+        acc_my_share = acc.compute_my_share()
+        if acc_my_share <= 0:
+            continue
+        my_total = Decimal(str(acc.my_percentage or 0))
+        if my_total <= 0:
+            my_own_total_share += acc_my_share
+            continue
+        my_own_pct = Decimal(str(acc.my_own_percentage or 0))
+        friend_pct = Decimal(str(acc.company_percentage or 0))
+        my_own_total_share += int((Decimal(acc_my_share) * (my_own_pct / my_total)))
+        friend_total_share += int((Decimal(acc_my_share) * (friend_pct / my_total)))
 
     writer.writerow(['Overview'])
     writer.writerow(['Total Funding', total_funding])
@@ -883,18 +890,17 @@ def api_custom_reports(request):
     friend_total_share = 0
 
     for acc in accounts:
-        try:
-            config = ClientExchangeReportConfig.objects.get(client_exchange=acc)
-            acc_my_share = acc.compute_my_share()
-            if acc_my_share > 0:
-                total_config_pct = float(config.my_own_percentage + config.friend_percentage)
-                if total_config_pct > 0:
-                    my_own_total_share += int((acc_my_share * float(config.my_own_percentage)) / total_config_pct)
-                    friend_total_share += int((acc_my_share * float(config.friend_percentage)) / total_config_pct)
-                else:
-                    my_own_total_share += acc_my_share
-        except ClientExchangeReportConfig.DoesNotExist:
-            my_own_total_share += acc.compute_my_share()
+        acc_my_share = acc.compute_my_share()
+        if acc_my_share <= 0:
+            continue
+        my_total = Decimal(str(acc.my_percentage or 0))
+        if my_total <= 0:
+            my_own_total_share += acc_my_share
+            continue
+        my_own_pct = Decimal(str(acc.my_own_percentage or 0))
+        friend_pct = Decimal(str(acc.company_percentage or 0))
+        my_own_total_share += int((Decimal(acc_my_share) * (my_own_pct / my_total)))
+        friend_total_share += int((Decimal(acc_my_share) * (friend_pct / my_total)))
 
     # Serialize transactions for mobile
     transaction_data = []
@@ -943,10 +949,10 @@ def api_link_exchange(request):
         try:
             client = Client.objects.get(pk=client_id, user=request.user)
             exchange = Exchange.objects.get(pk=exchange_id)
-            my_percentage_float = float(my_percentage)
+            my_pct = Decimal(str(my_percentage))
 
             # Validate percentage range
-            if my_percentage_float < 0 or my_percentage_float > 100:
+            if my_pct < 0 or my_pct > 100:
                 return Response({'error': 'My Total % must be between 0 and 100.'}, status=400)
 
             # Check if link already exists
@@ -960,29 +966,12 @@ def api_link_exchange(request):
                 exchange=exchange,
                 funding=0,  # Initial funding is 0 in this version
                 exchange_balance=0,
-                my_percentage=my_percentage_float,
-                loss_share_percentage=my_percentage_float,  # Default to my_percentage
-                profit_share_percentage=my_percentage_float,  # Default to my_percentage (can change anytime)
+                my_percentage=my_pct,
+                company_percentage=Decimal(str(friend_percentage)) if friend_percentage else Decimal("0"),
+                my_own_percentage=Decimal(str(my_own_percentage)) if my_own_percentage else Decimal("0"),
+                loss_share_percentage=my_pct,  # Default to my_percentage
+                profit_share_percentage=my_pct,  # Default to my_percentage (can change anytime)
             )
-
-            # Create report config if friend/own percentages provided
-            if friend_percentage or my_own_percentage:
-                friend_pct = Decimal(str(friend_percentage).strip()) if friend_percentage and friend_percentage.strip() else Decimal('0')
-                own_pct = Decimal(str(my_own_percentage).strip()) if my_own_percentage and my_own_percentage.strip() else Decimal('0')
-                my_total_pct = Decimal(str(my_percentage_float))
-
-                # Validate: friend % + my own % = my total % (with epsilon for floating point comparison)
-                epsilon = Decimal('0.01')
-                sum_percentages = friend_pct + own_pct
-                if abs(sum_percentages - my_total_pct) >= epsilon:
-                    # Don't fail - just log warning and continue without report config
-                    print(f"WARNING: Company % ({friend_pct}) + My Own % ({own_pct}) = {sum_percentages}, but My Total % = {my_total_pct}. Report config not created.")
-                else:
-                    ClientExchangeReportConfig.objects.create(
-                        client_exchange=account,
-                        friend_percentage=friend_pct,
-                        my_own_percentage=own_pct,
-                    )
 
             return Response({'status': 'success', 'account_id': account.id})
 
