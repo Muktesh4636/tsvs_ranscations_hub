@@ -1,0 +1,4 @@
+.DS_Store
+backups/.DS_Store
+backups/local_backups/
+backups/local_backups/**
