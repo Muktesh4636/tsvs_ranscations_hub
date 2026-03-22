@@ -1843,52 +1843,47 @@ def pending_summary(request):
     # Sort client_exchanges by client name to group them
     client_exchanges = client_exchanges.order_by('client__name', 'exchange__name')
 
-    # Settlements page should show YOUR personal share by default:
-    # - If my_own_percentage is configured (>0), use that.
-    # - Otherwise fall back to my_percentage.
-    from decimal import Decimal, ROUND_FLOOR
-
-    def _share_from_pct(abs_pnl: int, pct: Decimal) -> int:
-        if abs_pnl <= 0:
-            return 0
-        if pct is None:
-            return 0
-        pct = Decimal(str(pct))
-        if pct <= 0:
-            return 0
-        exact = Decimal(abs_pnl) * (pct / Decimal("100"))
-        return int(exact.to_integral_value(rounding=ROUND_FLOOR))
-
+    # Settlements page: show TOTAL percentage (Company% + MyOwn% == MyTotal%).
+    # The column name remains "MY%" but the value is `account.my_percentage`.
     for client_exchange in client_exchanges:
         client_pnl = int(client_exchange.compute_client_pnl() or 0)
-        abs_pnl = abs(int(client_pnl))
 
         is_loss_case = client_pnl < 0
         is_profit_case = client_pnl > 0
         is_neutral_case = client_pnl == 0
 
-        own_pct = Decimal(str(client_exchange.my_own_percentage or 0))
-        total_pct = Decimal(str(client_exchange.my_percentage or 0))
-        pct_used = own_pct if own_pct > 0 else total_pct
+        # Use masked-share settlement tracker for remaining.
+        client_exchange.lock_initial_share_if_needed()
+        settlement_info = client_exchange.get_remaining_settlement_amount()
+        initial_final_share = int(settlement_info.get("initial_final_share") or 0)
+        remaining_raw = int(settlement_info.get("remaining") or 0)
 
-        share_used = _share_from_pct(abs_pnl, pct_used)
-        show_na = is_neutral_case or share_used == 0
+        final_share_total = initial_final_share if initial_final_share > 0 else int(client_exchange.compute_my_share() or 0)
+        show_na = is_neutral_case or final_share_total == 0
+
+        display_remaining = calculate_display_remaining(client_pnl, remaining_raw)
+        remaining_display = abs(int(display_remaining)) if display_remaining else 0
 
         item = {
             "client": client_exchange.client,
             "exchange": client_exchange.exchange,
             "account": client_exchange,
             "client_pnl": client_pnl,
-            "amount_owed": abs_pnl if not is_neutral_case else 0,
-            "my_share_amount": share_used,
-            "remaining_amount": share_used if not show_na else 0,
-            "share_percentage": pct_used,
+            "amount_owed": abs(int(client_pnl)) if not is_neutral_case else 0,
+            "my_share_amount": final_share_total,
+            "remaining_amount": remaining_display,
+            "share_percentage": client_exchange.my_percentage,
             "show_na": show_na,
         }
 
         if is_loss_case or is_neutral_case:
+            # Hide rows that are fully settled (remaining 0) unless N.A.
+            if remaining_raw <= 0 and not show_na:
+                continue
             clients_owe_list.append(item)
         elif is_profit_case:
+            if remaining_raw <= 0 and not show_na:
+                continue
             you_owe_list.append(item)
     
     # Sort lists by client name first, then by amount (descending)
@@ -2195,53 +2190,47 @@ def export_pending_csv(request):
             Q(exchange__code__icontains=search_query)
         )
     
-    # Use EXACT same data building logic as pending_summary (personal share by default).
-    from decimal import Decimal, ROUND_FLOOR
-
-    def _share_from_pct(abs_pnl: int, pct: Decimal) -> int:
-        if abs_pnl <= 0:
-            return 0
-        if pct is None:
-            return 0
-        pct = Decimal(str(pct))
-        if pct <= 0:
-            return 0
-        exact = Decimal(abs_pnl) * (pct / Decimal("100"))
-        return int(exact.to_integral_value(rounding=ROUND_FLOOR))
-
+    # Use EXACT same data building logic as pending_summary (TOTAL percentage in MY%).
     clients_owe_list = []
     you_owe_list = []
 
     for client_exchange in client_exchanges:
         client_pnl = int(client_exchange.compute_client_pnl() or 0)
-        abs_pnl = abs(int(client_pnl))
 
         is_loss_case = client_pnl < 0
         is_profit_case = client_pnl > 0
         is_neutral_case = client_pnl == 0
 
-        own_pct = Decimal(str(client_exchange.my_own_percentage or 0))
-        total_pct = Decimal(str(client_exchange.my_percentage or 0))
-        pct_used = own_pct if own_pct > 0 else total_pct
+        client_exchange.lock_initial_share_if_needed()
+        settlement_info = client_exchange.get_remaining_settlement_amount()
+        initial_final_share = int(settlement_info.get("initial_final_share") or 0)
+        remaining_raw = int(settlement_info.get("remaining") or 0)
 
-        share_used = _share_from_pct(abs_pnl, pct_used)
-        show_na = is_neutral_case or share_used == 0
+        final_share_total = initial_final_share if initial_final_share > 0 else int(client_exchange.compute_my_share() or 0)
+        show_na = is_neutral_case or final_share_total == 0
+
+        display_remaining = calculate_display_remaining(client_pnl, remaining_raw)
+        remaining_display = abs(int(display_remaining)) if display_remaining else 0
 
         item = {
             "client": client_exchange.client,
             "exchange": client_exchange.exchange,
             "account": client_exchange,
             "client_pnl": client_pnl,
-            "amount_owed": abs_pnl if not is_neutral_case else 0,
-            "my_share_amount": share_used,
-            "remaining_amount": share_used if not show_na else 0,
-            "share_percentage": pct_used,
+            "amount_owed": abs(int(client_pnl)) if not is_neutral_case else 0,
+            "my_share_amount": final_share_total,
+            "remaining_amount": remaining_display,
+            "share_percentage": client_exchange.my_percentage,
             "show_na": show_na,
         }
 
         if is_loss_case or is_neutral_case:
+            if remaining_raw <= 0 and not show_na:
+                continue
             clients_owe_list.append(item)
         elif is_profit_case:
+            if remaining_raw <= 0 and not show_na:
+                continue
             you_owe_list.append(item)
             # CRITICAL FIX: Lock share and use locked share for remaining calculation
             client_exchange.lock_initial_share_if_needed()
@@ -2379,71 +2368,48 @@ def export_client_pending_csv(request, client_id):
         client__user=request.user
     ).select_related("client", "exchange")
 
-    # Use the same "personal share" logic as /clients/settlements/:
-    # If my_own_percentage is set (>0), use it; otherwise fall back to my_percentage.
-    from decimal import Decimal, ROUND_FLOOR
-
-    def _share_from_pct(abs_pnl: int, pct: Decimal) -> int:
-        if abs_pnl <= 0:
-            return 0
-        if pct is None:
-            return 0
-        pct = Decimal(str(pct))
-        if pct <= 0:
-            return 0
-        exact = Decimal(abs_pnl) * (pct / Decimal("100"))
-        return int(exact.to_integral_value(rounding=ROUND_FLOOR))
-
+    # Use the same TOTAL-share logic as /clients/settlements/ (MY% = account.my_percentage).
     clients_owe_list = []
     you_owe_list = []
 
     for client_exchange in client_exchanges:
         client_pnl = int(client_exchange.compute_client_pnl() or 0)
-        abs_pnl = abs(int(client_pnl))
 
         is_loss_case = client_pnl < 0
         is_profit_case = client_pnl > 0
         is_neutral_case = client_pnl == 0
 
-        own_pct = Decimal(str(client_exchange.my_own_percentage or 0))
-        total_pct = Decimal(str(client_exchange.my_percentage or 0))
-        pct_used = own_pct if own_pct > 0 else total_pct
-        share_used = _share_from_pct(abs_pnl, pct_used)
+        client_exchange.lock_initial_share_if_needed()
+        settlement_info = client_exchange.get_remaining_settlement_amount()
+        initial_final_share = int(settlement_info.get("initial_final_share") or 0)
+        remaining_raw = int(settlement_info.get("remaining") or 0)
 
-        show_na = is_neutral_case or share_used == 0
+        final_share_total = initial_final_share if initial_final_share > 0 else int(client_exchange.compute_my_share() or 0)
+        show_na = is_neutral_case or final_share_total == 0
+
+        display_remaining = calculate_display_remaining(client_pnl, remaining_raw)
+        remaining_display = abs(int(display_remaining)) if display_remaining else 0
+
         item = {
             "client": client_exchange.client,
             "exchange": client_exchange.exchange,
             "account": client_exchange,
             "client_pnl": client_pnl,
-            "amount_owed": abs_pnl if not is_neutral_case else 0,
-            "my_share_amount": share_used,
-            "remaining_amount": share_used if not show_na else 0,
-            "share_percentage": pct_used,
+            "amount_owed": abs(int(client_pnl)) if not is_neutral_case else 0,
+            "my_share_amount": final_share_total,
+            "remaining_amount": remaining_display,
+            "share_percentage": client_exchange.my_percentage,
             "show_na": show_na,
         }
 
         if is_loss_case or is_neutral_case:
+            if remaining_raw <= 0 and not show_na:
+                continue
             clients_owe_list.append(item)
         elif is_profit_case:
+            if remaining_raw <= 0 and not show_na:
+                continue
             you_owe_list.append(item)
-
-    # Sort lists by amount (descending)
-    # Sort by Final Share or amount_owed, handling N.A cases
-    def get_sort_key(item):
-        if item.get("show_na", False):
-            return 0  # N.A items sort to bottom
-        if "my_share_amount" in item:
-            return abs(item["my_share_amount"])
-        elif "amount_owed" in item:
-            return abs(item["amount_owed"])
-        elif "client_pnl" in item:
-            return abs(item["client_pnl"])
-        else:
-            return 0
-
-    clients_owe_list.sort(key=get_sort_key, reverse=True)
-    you_owe_list.sort(key=get_sort_key, reverse=True)
 
     # Create CSV response
     response = HttpResponse(content_type='text/csv')
@@ -2451,49 +2417,72 @@ def export_client_pending_csv(request, client_id):
 
     writer = csv.writer(response)
 
-    # Write header for "Clients Owe You" section
-    if clients_owe_list:
-        writer.writerow(['=== CLIENTS OWE YOU ==='])
-        writer.writerow([])
-        writer.writerow(['Period', 'Master', 'U_CODE', 'OPENING POINTS', 'AVL.POINTS(CLOSING POINTS)', 'PROFIT(+)/LOSS(-)', 'MY SHARE', 'MY%', 'Status'])
+    # Single table CSV like the screenshot (no section titles, no Status column).
+    writer.writerow([
+        "Period",
+        "Master",
+        "U_CODE",
+        "OPENING POINTS",
+        "AVL.POINTS(CLOSING POINTS)",
+        "PROFIT(+)/LOSS(-)",
+        "MY SHARE",
+        "MY%",
+    ])
 
-        today_str = timezone.now().strftime('%Y-%m-%d')
-        for item in clients_owe_list:
-            row_data = [
-                today_str,  # Always show Period
-                f'{item["exchange"].name}{f" ({item["exchange"].code})" if item["exchange"].code else ""}',
-                item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-'),  # Always show U_CODE
-                f'{item["account"].funding:.2f}',
-                f'{item["account"].exchange_balance:.2f}',
-                'N.A' if item.get("show_na", False) else f'{item["client_pnl"]:.2f}',
-                'N.A' if item.get("show_na", False) else f'{item["remaining_amount"]:.2f}',
-                f'{item.get("share_percentage", item["account"].my_percentage)}%',
-                'Pending' if not item.get("show_na", False) else 'Settled'
-            ]
-            writer.writerow(row_data)
-        writer.writerow([])
+    def _period_for_account(acc: ClientExchangeAccount) -> str:
+        try:
+            if getattr(acc, "cycle_start_date", None):
+                return acc.cycle_start_date.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+        return timezone.now().strftime("%Y-%m-%d")
 
-    # Write header for "You Owe Clients" section
-    if you_owe_list:
-        writer.writerow(['=== YOU OWE CLIENTS ==='])
-        writer.writerow([])
-        writer.writerow(['Period', 'Master', 'U_CODE', 'OPENING POINTS', 'AVL.POINTS(CLOSING POINTS)', 'PROFIT(+)/LOSS(-)', 'MY SHARE', 'MY%', 'Status'])
+    def _pct_str(pct) -> str:
+        if pct is None:
+            return "0"
+        s = str(pct).strip()
+        if s == "":
+            return "0"
+        # drop trailing zeros for CSV (18.00 -> 18)
+        if "." in s:
+            s = s.rstrip("0").rstrip(".")
+        return s
 
-        today_str = timezone.now().strftime('%Y-%m-%d')
-        for item in you_owe_list:
-            row_data = [
-                today_str,  # Always show Period
-                f'{item["exchange"].name}{f" ({item["exchange"].code})" if item["exchange"].code else ""}',
-                item["client"].name if item["client"].name == "VENU" else (item["client"].code or '-'),  # Always show U_CODE
-                f'{item["account"].funding:.2f}',
-                f'{item["account"].exchange_balance:.2f}',
-                'N.A' if item.get("show_na", False) else f'{item["client_pnl"]:.2f}',
-                'N.A' if item.get("show_na", False) else f'{item["remaining_amount"]:.2f}',
-                f'{item.get("share_percentage", item["account"].my_percentage)}%',
-                'Pending' if not item.get("show_na", False) else 'Settled'
-            ]
-            writer.writerow(row_data)
-        writer.writerow([])
+    all_items = clients_owe_list + you_owe_list
+    # Safety: de-duplicate by account id (prevents duplicate CSV rows if upstream lists ever contain repeats)
+    deduped = []
+    seen_account_ids = set()
+    for item in all_items:
+        acc_id = getattr(item.get("account"), "id", None)
+        if acc_id is None or acc_id in seen_account_ids:
+            continue
+        seen_account_ids.add(acc_id)
+        deduped.append(item)
+
+    deduped.sort(key=lambda x: (x["exchange"].name.lower(), -abs(int(x.get("client_pnl") or 0))))
+
+    for item in deduped:
+        acc = item["account"]
+        master = f'{item["exchange"].name}{f" ({item["exchange"].code})" if item["exchange"].code else ""}'
+        u_code = item["client"].code or "-"
+
+        if item.get("show_na", False):
+            pnl_val = "N.A"
+            share_val = "N.A"
+        else:
+            pnl_val = int(item["client_pnl"])
+            share_val = int(item.get("remaining_amount", 0))
+
+        writer.writerow([
+            _period_for_account(acc),
+            master,
+            u_code,
+            int(acc.funding),
+            int(acc.exchange_balance),
+            pnl_val,
+            share_val,
+            _pct_str(item.get("share_percentage")),
+        ])
 
     return response
 
@@ -5361,7 +5350,7 @@ def pending_payment_settlement(request, pk, exchange_slug=None):
     Client-payments settlement for ONE exchange account.
 
     Uses per-account pending ledger when available.
-    The settlement amount cannot exceed the pending amount (abs).
+    Allows over-settlement: if the recorded amount exceeds pending, the balance flips.
 
     Sign / direction:
     - pending_display > 0: client needs to pay me (record RECEIVED)
@@ -5390,13 +5379,9 @@ def pending_payment_settlement(request, pk, exchange_slug=None):
             messages.error(request, "Amount must be greater than zero.")
         elif max_amount == 0:
             messages.info(request, "No pending amount to settle.")
-        elif amount > max_amount:
-            messages.error(request, f"Amount cannot be more than pending due ({max_amount}).")
         else:
             from django.db import transaction as db_transaction
             from .models import Client
-
-            tx_type = "RECEIVED" if pending_display > 0 else "GIVEN"
 
             with db_transaction.atomic():
                 locked_account = (
@@ -5405,6 +5390,14 @@ def pending_payment_settlement(request, pk, exchange_slug=None):
                     .get(pk=account.pk, client__user=request.user)
                 )
                 locked_client = Client.objects.select_for_update().get(pk=locked_account.client_id, user=request.user)
+
+                # Re-check pending under lock.
+                locked_pending_display = int(locked_account.pending_balance)
+                if locked_pending_display == 0:
+                    messages.info(request, "No pending amount to settle.")
+                    return redirect(reverse("payments_exchange_account_detail", args=[account.pk, account.exchange.get_slug()]))
+
+                tx_type = "RECEIVED" if locked_pending_display > 0 else "GIVEN"
 
                 PendingPaymentTransaction.objects.create(
                     client=locked_client,
@@ -5415,7 +5408,17 @@ def pending_payment_settlement(request, pk, exchange_slug=None):
                     notes=notes or f"Settlement - {locked_account.exchange.name}",
                     created_by=request.user,
                 )
-            messages.success(request, f"Settlement recorded: {tx_type} {amount}.")
+
+            # Compute new pending after applying this settlement (ledger convention: pending = given - received)
+            if tx_type == "RECEIVED":
+                new_pending = locked_pending_display - int(amount)
+            else:
+                new_pending = locked_pending_display + int(amount)
+
+            messages.success(
+                request,
+                f"Settlement recorded: {tx_type} {amount}. New pending: {new_pending:+}"
+            )
             return redirect(reverse("payments_exchange_account_detail", args=[account.pk, account.exchange.get_slug()]))
 
     return render(request, "core/pending_payments/settlement.html", {

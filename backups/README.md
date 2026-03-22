@@ -1,6 +1,22 @@
 # Database Backups
 
-## Backup Date: 2026-01-15 18:10:42
+## Latest Backup: 2026-03-06 19:04:28
+
+### Newest Backup Files:
+
+1. **django_backup_20260306_190428.json** (~20K)
+   - Django JSON format backup
+   - Contains all Django model data (exchanges, clients, accounts, etc.)
+   - Restore: `python manage.py loaddata backups/django_backup_20260306_190428.json`
+
+2. **postgres_backup_20260306_190428.sql** (~61K)
+   - PostgreSQL SQL text format backup
+   - Human-readable, complete database
+   - Restore: `psql -h localhost -U postgres -d broker_portal < backups/postgres_backup_20260306_190428.sql`
+
+---
+
+## Previous Backup: 2026-01-15 18:10:42
 
 ### Backup Files:
 

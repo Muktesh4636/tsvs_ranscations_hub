@@ -1,0 +1,1052 @@
+[
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add log entry",
+    "content_type": [
+      "admin",
+      "logentry"
+    ],
+    "codename": "add_logentry"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change log entry",
+    "content_type": [
+      "admin",
+      "logentry"
+    ],
+    "codename": "change_logentry"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete log entry",
+    "content_type": [
+      "admin",
+      "logentry"
+    ],
+    "codename": "delete_logentry"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view log entry",
+    "content_type": [
+      "admin",
+      "logentry"
+    ],
+    "codename": "view_logentry"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add permission",
+    "content_type": [
+      "auth",
+      "permission"
+    ],
+    "codename": "add_permission"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change permission",
+    "content_type": [
+      "auth",
+      "permission"
+    ],
+    "codename": "change_permission"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete permission",
+    "content_type": [
+      "auth",
+      "permission"
+    ],
+    "codename": "delete_permission"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view permission",
+    "content_type": [
+      "auth",
+      "permission"
+    ],
+    "codename": "view_permission"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add group",
+    "content_type": [
+      "auth",
+      "group"
+    ],
+    "codename": "add_group"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change group",
+    "content_type": [
+      "auth",
+      "group"
+    ],
+    "codename": "change_group"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete group",
+    "content_type": [
+      "auth",
+      "group"
+    ],
+    "codename": "delete_group"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view group",
+    "content_type": [
+      "auth",
+      "group"
+    ],
+    "codename": "view_group"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add content type",
+    "content_type": [
+      "contenttypes",
+      "contenttype"
+    ],
+    "codename": "add_contenttype"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change content type",
+    "content_type": [
+      "contenttypes",
+      "contenttype"
+    ],
+    "codename": "change_contenttype"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete content type",
+    "content_type": [
+      "contenttypes",
+      "contenttype"
+    ],
+    "codename": "delete_contenttype"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view content type",
+    "content_type": [
+      "contenttypes",
+      "contenttype"
+    ],
+    "codename": "view_contenttype"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add session",
+    "content_type": [
+      "sessions",
+      "session"
+    ],
+    "codename": "add_session"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change session",
+    "content_type": [
+      "sessions",
+      "session"
+    ],
+    "codename": "change_session"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete session",
+    "content_type": [
+      "sessions",
+      "session"
+    ],
+    "codename": "delete_session"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view session",
+    "content_type": [
+      "sessions",
+      "session"
+    ],
+    "codename": "view_session"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add Token",
+    "content_type": [
+      "authtoken",
+      "token"
+    ],
+    "codename": "add_token"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change Token",
+    "content_type": [
+      "authtoken",
+      "token"
+    ],
+    "codename": "change_token"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete Token",
+    "content_type": [
+      "authtoken",
+      "token"
+    ],
+    "codename": "delete_token"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view Token",
+    "content_type": [
+      "authtoken",
+      "token"
+    ],
+    "codename": "view_token"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add token",
+    "content_type": [
+      "authtoken",
+      "tokenproxy"
+    ],
+    "codename": "add_tokenproxy"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change token",
+    "content_type": [
+      "authtoken",
+      "tokenproxy"
+    ],
+    "codename": "change_tokenproxy"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete token",
+    "content_type": [
+      "authtoken",
+      "tokenproxy"
+    ],
+    "codename": "delete_tokenproxy"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view token",
+    "content_type": [
+      "authtoken",
+      "tokenproxy"
+    ],
+    "codename": "view_tokenproxy"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add user",
+    "content_type": [
+      "core",
+      "customuser"
+    ],
+    "codename": "add_customuser"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change user",
+    "content_type": [
+      "core",
+      "customuser"
+    ],
+    "codename": "change_customuser"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete user",
+    "content_type": [
+      "core",
+      "customuser"
+    ],
+    "codename": "delete_customuser"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view user",
+    "content_type": [
+      "core",
+      "customuser"
+    ],
+    "codename": "view_customuser"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add client",
+    "content_type": [
+      "core",
+      "client"
+    ],
+    "codename": "add_client"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change client",
+    "content_type": [
+      "core",
+      "client"
+    ],
+    "codename": "change_client"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete client",
+    "content_type": [
+      "core",
+      "client"
+    ],
+    "codename": "delete_client"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view client",
+    "content_type": [
+      "core",
+      "client"
+    ],
+    "codename": "view_client"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add client exchange account",
+    "content_type": [
+      "core",
+      "clientexchangeaccount"
+    ],
+    "codename": "add_clientexchangeaccount"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change client exchange account",
+    "content_type": [
+      "core",
+      "clientexchangeaccount"
+    ],
+    "codename": "change_clientexchangeaccount"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete client exchange account",
+    "content_type": [
+      "core",
+      "clientexchangeaccount"
+    ],
+    "codename": "delete_clientexchangeaccount"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view client exchange account",
+    "content_type": [
+      "core",
+      "clientexchangeaccount"
+    ],
+    "codename": "view_clientexchangeaccount"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add exchange",
+    "content_type": [
+      "core",
+      "exchange"
+    ],
+    "codename": "add_exchange"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change exchange",
+    "content_type": [
+      "core",
+      "exchange"
+    ],
+    "codename": "change_exchange"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete exchange",
+    "content_type": [
+      "core",
+      "exchange"
+    ],
+    "codename": "delete_exchange"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view exchange",
+    "content_type": [
+      "core",
+      "exchange"
+    ],
+    "codename": "view_exchange"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add transaction",
+    "content_type": [
+      "core",
+      "transaction"
+    ],
+    "codename": "add_transaction"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change transaction",
+    "content_type": [
+      "core",
+      "transaction"
+    ],
+    "codename": "change_transaction"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete transaction",
+    "content_type": [
+      "core",
+      "transaction"
+    ],
+    "codename": "delete_transaction"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view transaction",
+    "content_type": [
+      "core",
+      "transaction"
+    ],
+    "codename": "view_transaction"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add Report Configuration",
+    "content_type": [
+      "core",
+      "clientexchangereportconfig"
+    ],
+    "codename": "add_clientexchangereportconfig"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change Report Configuration",
+    "content_type": [
+      "core",
+      "clientexchangereportconfig"
+    ],
+    "codename": "change_clientexchangereportconfig"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete Report Configuration",
+    "content_type": [
+      "core",
+      "clientexchangereportconfig"
+    ],
+    "codename": "delete_clientexchangereportconfig"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view Report Configuration",
+    "content_type": [
+      "core",
+      "clientexchangereportconfig"
+    ],
+    "codename": "view_clientexchangereportconfig"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add settlement",
+    "content_type": [
+      "core",
+      "settlement"
+    ],
+    "codename": "add_settlement"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change settlement",
+    "content_type": [
+      "core",
+      "settlement"
+    ],
+    "codename": "change_settlement"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete settlement",
+    "content_type": [
+      "core",
+      "settlement"
+    ],
+    "codename": "delete_settlement"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view settlement",
+    "content_type": [
+      "core",
+      "settlement"
+    ],
+    "codename": "view_settlement"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add email otp",
+    "content_type": [
+      "core",
+      "emailotp"
+    ],
+    "codename": "add_emailotp"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change email otp",
+    "content_type": [
+      "core",
+      "emailotp"
+    ],
+    "codename": "change_emailotp"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete email otp",
+    "content_type": [
+      "core",
+      "emailotp"
+    ],
+    "codename": "delete_emailotp"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view email otp",
+    "content_type": [
+      "core",
+      "emailotp"
+    ],
+    "codename": "view_emailotp"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add mobile log",
+    "content_type": [
+      "core",
+      "mobilelog"
+    ],
+    "codename": "add_mobilelog"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change mobile log",
+    "content_type": [
+      "core",
+      "mobilelog"
+    ],
+    "codename": "change_mobilelog"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete mobile log",
+    "content_type": [
+      "core",
+      "mobilelog"
+    ],
+    "codename": "delete_mobilelog"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view mobile log",
+    "content_type": [
+      "core",
+      "mobilelog"
+    ],
+    "codename": "view_mobilelog"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can add pending payment transaction",
+    "content_type": [
+      "core",
+      "pendingpaymenttransaction"
+    ],
+    "codename": "add_pendingpaymenttransaction"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can change pending payment transaction",
+    "content_type": [
+      "core",
+      "pendingpaymenttransaction"
+    ],
+    "codename": "change_pendingpaymenttransaction"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can delete pending payment transaction",
+    "content_type": [
+      "core",
+      "pendingpaymenttransaction"
+    ],
+    "codename": "delete_pendingpaymenttransaction"
+  }
+},
+{
+  "model": "auth.permission",
+  "fields": {
+    "name": "Can view pending payment transaction",
+    "content_type": [
+      "core",
+      "pendingpaymenttransaction"
+    ],
+    "codename": "view_pendingpaymenttransaction"
+  }
+},
+{
+  "model": "core.customuser",
+  "fields": {
+    "password": "pbkdf2_sha256$600000$pjloUWQhOnrnh1zINqCWa8$2wf+z5cbJOh4KZs31mWWny4ftRf9CjCGOpary+8MsAo=",
+    "last_login": "2026-02-12T15:45:33.528Z",
+    "is_superuser": true,
+    "first_name": "",
+    "last_name": "",
+    "email": "admin@example.com",
+    "is_staff": true,
+    "is_active": true,
+    "date_joined": "2026-02-09T13:47:01.168Z",
+    "username": "admin",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "core.customuser",
+  "fields": {
+    "password": "pbkdf2_sha256$600000$cagUudAbsRNNZRbt3T7Qlk$+IoEo9DLXZ0ZApwbMKMb/iHUjDYHjRRO+k3xAKMXS6k=",
+    "last_login": null,
+    "is_superuser": false,
+    "first_name": "",
+    "last_name": "",
+    "email": "test@example.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-02-09T13:47:04.357Z",
+    "username": "testuser",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "core.customuser",
+  "fields": {
+    "password": "pbkdf2_sha256$600000$eo89WR3DmvC355gwZar3u5$JlRdByiTQLnwsShL5wBkGmE9QGUjXaZnufTV6rsgnKI=",
+    "last_login": null,
+    "is_superuser": false,
+    "first_name": "",
+    "last_name": "",
+    "email": "9182351381@example.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-02-10T06:14:23.548Z",
+    "username": "9182351381",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "core.customuser",
+  "fields": {
+    "password": "pbkdf2_sha256$600000$lj2NulGX3wWUj7LsVoJM9M$urU1ia7sNneOJ9vapV0WtfvlcGMFPLAZChNM/Lw3UEo=",
+    "last_login": "2026-03-06T09:14:32.205Z",
+    "is_superuser": true,
+    "first_name": "",
+    "last_name": "",
+    "email": "muktesh@example.com",
+    "is_staff": true,
+    "is_active": true,
+    "date_joined": "2026-02-10T21:05:52.621Z",
+    "username": "muktesh",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "core.client",
+  "pk": 5,
+  "fields": {
+    "created_at": "2026-02-12T15:46:25.438Z",
+    "updated_at": "2026-02-12T15:46:25.438Z",
+    "name": "Svs",
+    "code": "svs77",
+    "referred_by": null,
+    "is_company_client": false,
+    "user": [
+      "admin"
+    ],
+    "pending_balance": 1200
+  }
+},
+{
+  "model": "core.client",
+  "pk": 26,
+  "fields": {
+    "created_at": "2026-03-06T09:15:19.213Z",
+    "updated_at": "2026-03-06T09:15:19.213Z",
+    "name": "a1",
+    "code": null,
+    "referred_by": null,
+    "is_company_client": false,
+    "user": [
+      "muktesh"
+    ],
+    "pending_balance": 0
+  }
+},
+{
+  "model": "core.exchange",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-02-10T21:06:29.278Z",
+    "updated_at": "2026-02-10T21:06:29.278Z",
+    "name": "diamond",
+    "version_name": null,
+    "code": null
+  }
+},
+{
+  "model": "core.exchange",
+  "pk": 2,
+  "fields": {
+    "created_at": "2026-03-01T19:37:35.678Z",
+    "updated_at": "2026-03-01T19:37:35.678Z",
+    "name": "dafa",
+    "version_name": null,
+    "code": null
+  }
+},
+{
+  "model": "core.clientexchangeaccount",
+  "pk": 6,
+  "fields": {
+    "created_at": "2026-02-12T15:46:45.905Z",
+    "updated_at": "2026-03-03T20:21:03.553Z",
+    "client": 5,
+    "exchange": 1,
+    "funding": 100000,
+    "exchange_balance": 100000,
+    "pending_balance": 1200,
+    "my_percentage": "12.00",
+    "company_percentage": "11.50",
+    "my_own_percentage": "0.50",
+    "loss_share_percentage": "12.00",
+    "profit_share_percentage": "12.00",
+    "total_share_amount": 0,
+    "company_share_amount": 0,
+    "locked_initial_final_share": null,
+    "locked_share_percentage": null,
+    "locked_initial_pnl": null,
+    "cycle_start_date": null,
+    "locked_initial_funding": null
+  }
+},
+{
+  "model": "core.settlement",
+  "pk": 27,
+  "fields": {
+    "created_at": "2026-03-03T20:21:03.550Z",
+    "updated_at": "2026-03-03T20:21:03.550Z",
+    "client_exchange": 6,
+    "amount": 1200,
+    "date": "2026-03-03T20:21:03.550Z",
+    "notes": "Dues generated (Client Payments) - not a real payment"
+  }
+},
+{
+  "model": "core.transaction",
+  "pk": 1,
+  "fields": {
+    "created_at": "2026-02-12T15:47:10.141Z",
+    "updated_at": "2026-02-12T15:47:10.141Z",
+    "client_exchange": 6,
+    "date": "2026-02-12T15:47:10.135Z",
+    "type": "FUNDING_MANUAL",
+    "amount": 100000,
+    "funding_before": 0,
+    "funding_after": 100000,
+    "exchange_balance_before": 0,
+    "exchange_balance_after": 100000,
+    "sequence_no": 1,
+    "notes": "Manual funding added: 100000"
+  }
+},
+{
+  "model": "core.transaction",
+  "pk": 4,
+  "fields": {
+    "created_at": "2026-02-12T15:59:11.156Z",
+    "updated_at": "2026-02-12T15:59:11.156Z",
+    "client_exchange": 6,
+    "date": "2026-02-12T15:59:11.153Z",
+    "type": "TRADE",
+    "amount": 10000,
+    "funding_before": 100000,
+    "funding_after": 100000,
+    "exchange_balance_before": 100000,
+    "exchange_balance_after": 90000,
+    "sequence_no": 2,
+    "notes": "TRADE: Balance updated 100000 → 90000 (-10000)"
+  }
+},
+{
+  "model": "core.transaction",
+  "pk": 91,
+  "fields": {
+    "created_at": "2026-03-03T20:21:03.552Z",
+    "updated_at": "2026-03-03T20:21:03.552Z",
+    "client_exchange": 6,
+    "date": "2026-03-03T20:21:03.551Z",
+    "type": "RECORD_PAYMENT",
+    "amount": 1200,
+    "funding_before": 100000,
+    "funding_after": 90000,
+    "exchange_balance_before": 90000,
+    "exchange_balance_after": 90000,
+    "sequence_no": 3,
+    "notes": "Dues generated (not paid). Masked Capital: 10000. Linked Settlement ID: 27"
+  }
+},
+{
+  "model": "core.transaction",
+  "pk": 92,
+  "fields": {
+    "created_at": "2026-03-03T20:21:03.555Z",
+    "updated_at": "2026-03-03T20:21:03.555Z",
+    "client_exchange": 6,
+    "date": "2026-03-03T20:21:03.554Z",
+    "type": "FUNDING_AUTO",
+    "amount": 10000,
+    "funding_before": 90000,
+    "funding_after": 100000,
+    "exchange_balance_before": 90000,
+    "exchange_balance_after": 100000,
+    "sequence_no": 4,
+    "notes": "Auto Re-Funding after dues generation (Settlement ID: 27). Amount: 10000 (Masked Capital)"
+  }
+},
+{
+  "model": "core.pendingpaymenttransaction",
+  "pk": 9,
+  "fields": {
+    "created_at": "2026-02-12T15:48:57.233Z",
+    "updated_at": "2026-02-12T15:48:57.233Z",
+    "client": 5,
+    "client_exchange": null,
+    "date": "2026-02-12T12:00:00Z",
+    "type": "GIVEN",
+    "amount": 1000,
+    "notes": "",
+    "created_by": [
+      "admin"
+    ]
+  }
+},
+{
+  "model": "core.pendingpaymenttransaction",
+  "pk": 10,
+  "fields": {
+    "created_at": "2026-02-12T16:00:42.559Z",
+    "updated_at": "2026-02-12T16:00:42.559Z",
+    "client": 5,
+    "client_exchange": null,
+    "date": "2026-02-12T12:00:00Z",
+    "type": "GIVEN",
+    "amount": 1200,
+    "notes": "",
+    "created_by": [
+      "admin"
+    ]
+  }
+},
+{
+  "model": "core.pendingpaymenttransaction",
+  "pk": 11,
+  "fields": {
+    "created_at": "2026-02-12T16:01:07.742Z",
+    "updated_at": "2026-02-12T16:01:07.742Z",
+    "client": 5,
+    "client_exchange": null,
+    "date": "2026-02-12T12:00:00Z",
+    "type": "RECEIVED",
+    "amount": 2200,
+    "notes": "",
+    "created_by": [
+      "admin"
+    ]
+  }
+},
+{
+  "model": "authtoken.token",
+  "pk": "0386e453190b30e847c247c76e436dc59b76c430",
+  "fields": {
+    "user": [
+      "admin"
+    ],
+    "created": "2026-02-10T21:05:01.847Z"
+  }
+},
+{
+  "model": "authtoken.token",
+  "pk": "3a2fdee6d3e6c741ceb3cd33d3172deaae419414",
+  "fields": {
+    "user": [
+      "muktesh"
+    ],
+    "created": "2026-02-10T21:06:18.867Z"
+  }
+}
+]

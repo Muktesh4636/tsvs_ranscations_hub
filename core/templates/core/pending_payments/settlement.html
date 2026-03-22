@@ -21,9 +21,9 @@
         </div>
         <div style="font-size: 13px; margin-top: 6px; color: var(--muted);">
             {% if pending_display > 0 %}
-                Client is in loss (client owes you). Suggested: record RECEIVED to reduce it.
+                Client needs to pay you (record Received to reduce it).
             {% else %}
-                Client is in profit (you owe client). Suggested: record GIVEN to reduce it.
+                You need to pay client (record Paid to reduce it).
             {% endif %}
         </div>
     {% endif %}
@@ -35,7 +35,7 @@
 
         <div>
             <label style="display:block; font-size: 13px; color: var(--muted); margin-bottom: 6px;">Amount</label>
-            <input class="field-input" name="amount" type="number" min="1" max="{{ max_amount }}" value="{{ max_amount }}" {% if max_amount == 0 %}disabled{% endif %} />
+            <input class="field-input" name="amount" type="number" min="1" value="{{ max_amount }}" {% if max_amount == 0 %}disabled{% endif %} />
         </div>
 
         <div>
