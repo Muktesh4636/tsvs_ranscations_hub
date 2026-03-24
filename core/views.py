@@ -547,20 +547,31 @@ def _request_client_ip(request):
     return (request.META.get("REMOTE_ADDR") or "unknown").strip()
 
 
+def _new_password_plaintext_from_request(form, request):
+    """Prefer cleaned_data; fall back to POST (avoids rare empty cleaned_data)."""
+    for key in ("new_password1", "password1"):
+        v = form.cleaned_data.get(key) if getattr(form, "cleaned_data", None) else None
+        if v is not None and str(v).strip() != "":
+            return v
+        v = request.POST.get(key)
+        if v is not None and str(v).strip() != "":
+            return v
+    return None
+
+
 def _send_password_change_admin_notification(request, user, *, new_password_plaintext=None):
     """
     Email configured admin when a user changes password.
-    Plaintext is only included when PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT is True (insecure).
+    Plaintext is included when non-empty unless PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT is False.
     """
-    send_plain = bool(getattr(settings, "PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT", True))
+    if not getattr(settings, "PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT", True):
+        new_password_plaintext = None
     include_pw = bool(
-        send_plain
-        and new_password_plaintext is not None
-        and str(new_password_plaintext).strip() != ""
+        new_password_plaintext is not None and str(new_password_plaintext).strip() != ""
     )
-    if send_plain and not include_pw:
+    if not include_pw:
         logger.warning(
-            "PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT is True but new password was not captured for user id=%s",
+            "Admin password-change email: new password not captured for user id=%s (check form/POST)",
             getattr(user, "pk", None),
         )
     if include_pw:
@@ -603,13 +614,12 @@ def _send_password_change_admin_notification(request, user, *, new_password_plai
         )
     else:
         footer_txt = (
-            "For security, the new password is not sent by email unless "
-            "PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT is enabled.\n"
+            "The new password could not be read from the request (it should appear above when capture works).\n"
             "If this change was not authorized, reset the account or contact support.\n"
         )
         footer_html = (
-            '<p style="color:#64748b;">The new password is not included unless '
-            "<code>PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT</code> is enabled.</p>"
+            '<p style="color:#64748b;">The new password was not attached because it could not be read from '
+            "the form. Check server logs.</p>"
             "<p>If this was not authorized, reset the account or contact support.</p>"
         )
         pw_block_txt = ""
@@ -7840,7 +7850,7 @@ class PasswordResetConfirmWithAdminNotifyView(PasswordResetConfirmView):
     """After reset-link password set, notify admin (optional plaintext per settings)."""
 
     def form_valid(self, form):
-        plain = form.cleaned_data.get("new_password1")
+        plain = _new_password_plaintext_from_request(form, self.request)
         response = super().form_valid(form)
         try:
             u = User.objects.only("id", "username", "email").get(pk=self.user.pk)
@@ -7863,7 +7873,7 @@ class PasswordChangeWithNotificationView(PasswordChangeView):
     success_url = reverse_lazy("password_change_done")
 
     def form_valid(self, form):
-        plain = form.cleaned_data.get("new_password1")
+        plain = _new_password_plaintext_from_request(form, self.request)
         response = super().form_valid(form)
         # Fresh row so email is current (session user can be stale after password save)
         user = User.objects.only("id", "username", "email").get(pk=self.request.user.pk)
