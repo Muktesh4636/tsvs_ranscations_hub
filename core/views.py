@@ -1,13 +1,13 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 import json
-import time
 import subprocess
 import os
 from pathlib import Path
 
 from django.contrib.auth import logout, login, authenticate, get_user_model
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.views import PasswordChangeView, PasswordResetConfirmView
 
 User = get_user_model()
 from django.db.models import Q, Sum, Count, F
@@ -16,9 +16,11 @@ from django.core.exceptions import FieldError
 from django.db import transaction as db_transaction
 from django.http import HttpResponse, JsonResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
+from django.contrib import messages
+from django.urls import reverse, reverse_lazy
 from django.views.decorators.http import require_http_methods
 from django.utils import timezone
+from django.utils.html import escape
 from django.core.cache import cache
 from django.conf import settings
 from django.core.mail import send_mail
@@ -38,7 +40,7 @@ from .models import (
     EmailOTP,
     MobileLog,
     )
-from .forms import SignupForm, OTPVerificationForm
+from .forms import SignupForm, OTPVerificationForm, UserProfileForm, ChipPasswordChangeForm
 
 # Health check view for monitoring
 def health_check(request):
@@ -370,72 +372,45 @@ def calculate_admin_profit_loss(client_profit_loss, settings, admin_profit_share
 
 
 def login_view(request):
-    """
-    Secure login view with rate limiting and account lockout protection.
-    """
+    """Login view (no per-IP or per-user attempt lockout)."""
     if request.user.is_authenticated:
         return redirect("dashboard")
-    
-    # Get client IP for rate limiting
-    ip_address = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or request.META.get('REMOTE_ADDR', '127.0.0.1')
-    login_rate_limit_key = f'login_rate_limit:{ip_address}'
-    
+
     if request.method == "POST":
-        # Check rate limit for login attempts
-        login_attempts = cache.get(login_rate_limit_key, 0)
-        max_login_attempts = getattr(settings, 'LOGIN_RATE_LIMIT_REQUESTS', 5)
-        login_window = getattr(settings, 'LOGIN_RATE_LIMIT_WINDOW', 300)  # 5 minutes
-        
-        if login_attempts >= max_login_attempts:
-            logger.warning(f'Login rate limit exceeded for IP: {ip_address}')
-            return render(request, "core/auth/login.html", {
-                "error": "Too many login attempts. Please try again in 5 minutes."
-            })
-        
         username = request.POST.get("username", "").strip()
         password = request.POST.get("password", "")
-        
-        # Validate input
+
         if not username or not password:
-            cache.set(login_rate_limit_key, login_attempts + 1, login_window)
-            return render(request, "core/auth/login.html", {
-                "error": "Username and password are required."
-            })
-        
-        # Check for account lockout (per username)
-        username_lockout_key = f'login_lockout:{username}'
-        lockout_until = cache.get(username_lockout_key)
-        if lockout_until and time.time() < lockout_until:
-            remaining_time = int((lockout_until - time.time()) / 60) + 1
-            return render(request, "core/auth/login.html", {
-                "error": f"Account temporarily locked. Try again in {remaining_time} minute(s)."
-            })
-        
-        # Authenticate user
+            return render(
+                request,
+                "core/auth/login.html",
+                {
+                    "error": "Username and password are required.",
+                    "username": username,
+                },
+            )
+
         user = authenticate(request, username=username, password=password)
-        
+
         if user is not None:
-            # Successful login - reset rate limit
-            cache.delete(login_rate_limit_key)
-            cache.delete(username_lockout_key)
             login(request, user)
-            logger.info(f'Successful login for user: {username} from IP: {ip_address}')
+            ip_address = (
+                request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+                or request.META.get("REMOTE_ADDR", "127.0.0.1")
+            )
+            logger.info(f"Successful login for user: {username} from IP: {ip_address}")
             return redirect("dashboard")
-        else:
-            # Failed login - increment rate limit
-            cache.set(login_rate_limit_key, login_attempts + 1, login_window)
-            
-            # Lock account after max attempts
-            if login_attempts + 1 >= max_login_attempts:
-                lockout_duration = login_window  # Lock for the same duration as rate limit window
-                cache.set(username_lockout_key, time.time() + lockout_duration, lockout_duration)
-                logger.warning(f'Account locked for username: {username} from IP: {ip_address}')
-            
-            # Generic error message (don't reveal if username exists)
-            return render(request, "core/auth/login.html", {
-                "error": "Invalid username or password."
-            })
-    
+
+        return render(
+            request,
+            "core/auth/login.html",
+            {
+                "error": "Invalid username or password.",
+                "username": username,
+                "invalid_credentials": True,
+            },
+        )
+
     return render(request, "core/auth/login.html")
 
 
@@ -456,17 +431,268 @@ def logout_view(request):
 
 
 def generate_otp():
-    """Generate a 6-digit OTP code."""
-    return ''.join(random.choices(string.digits, k=6))
+    """Generate a 4-digit OTP code."""
+    return "".join(random.choices(string.digits, k=4))
 
 
-def send_otp_email(email, username, otp_code):
-    """Send OTP code to user's email."""
-    subject = 'Verify Your Email - Transaction Hub'
+def _device_summary_from_user_agent(user_agent):
+    """Short label like 'Chrome on Windows' for account notification emails."""
+    ua = (user_agent or "")[:800]
+    browser = "Unknown browser"
+    if "Edg/" in ua or " Edg/" in ua:
+        browser = "Edge"
+    elif "Chrome" in ua and "Chromium" not in ua and "Edg" not in ua:
+        browser = "Chrome"
+    elif "Firefox" in ua:
+        browser = "Firefox"
+    elif "Safari" in ua and "Chrome" not in ua:
+        browser = "Safari"
+    elif "Chromium" in ua:
+        browser = "Chromium"
+
+    os_name = "Unknown OS"
+    if "Windows" in ua:
+        os_name = "Windows"
+    elif "Mac OS X" in ua or "Macintosh" in ua:
+        os_name = "macOS"
+    elif "Android" in ua:
+        os_name = "Android"
+    elif "iPhone" in ua or "iPad" in ua or "iOS" in ua:
+        os_name = "iOS"
+    elif "Linux" in ua:
+        os_name = "Linux"
+
+    return f"{browser} on {os_name}"
+
+
+def _email_brand_logo_url(request):
+    """
+    Public https URL for the company logo in HTML <img> tags.
+    No image is attached to the email — clients load the symbol from your site (after collectstatic).
+    """
+    from django.templatetags.static import static
+
+    path = static("core/img/pravoo.jpg")
+    explicit = (getattr(settings, "EMAIL_LOGO_URL", None) or "").strip()
+    if explicit:
+        return explicit
+    base = (getattr(settings, "EMAIL_PUBLIC_SITE_URL", None) or "").strip().rstrip("/")
+    if base:
+        return f"{base}{path}" if path.startswith("/") else f"{base}/{path}"
+    return None
+
+
+def _html_email_pravoo_header(logo_img_src):
+    """
+    Logo + product line (brand name appears once in the footer only).
+    logo_img_src: public https URL to the logo image, or None to omit image.
+    """
+    img_html = ""
+    if logo_img_src:
+        img_html = f"""<img src="{escape(logo_img_src)}" alt="Pravoo" width="180" style="display:block; max-width: 220px; height: auto; border: 0; margin-bottom: 14px;" />
+"""
+    return f"""<div style="margin-bottom: 20px; padding-bottom: 18px; border-bottom: solid 1px #e2e8f0;">
+{img_html}<div style="font-size: 13px; color: #64748b;">Transaction Hub</div>
+</div>"""
+
+
+def _send_html_mail(subject, text_body, html_body, from_email, recipient_list):
+    """Multipart/alternative HTML email without embedding image attachments."""
+    send_mail(
+        subject,
+        text_body,
+        from_email,
+        recipient_list,
+        fail_silently=False,
+        html_message=html_body,
+    )
+
+
+def _send_html_mail_with_inline_image(
+    subject,
+    text_body,
+    html_body,
+    from_email,
+    recipient_list,
+    *,
+    inline_image_path=None,
+    inline_image_cid="pravoo_logo",
+):
+    """
+    Multipart/alternative HTML email with an optional inline image (CID).
+    This is more reliable than remote images because many clients block external image loads.
+    """
+    from email.mime.image import MIMEImage
+    import os
+
+    from django.core.mail import EmailMultiAlternatives
+
+    msg = EmailMultiAlternatives(subject, text_body, from_email, recipient_list)
+    msg.attach_alternative(html_body, "text/html")
+
+    if inline_image_path:
+        with open(inline_image_path, "rb") as f:
+            img = MIMEImage(f.read())
+        img.add_header("Content-ID", f"<{inline_image_cid}>")
+        img.add_header("Content-Disposition", "inline", filename=os.path.basename(inline_image_path))
+        msg.attach(img)
+
+    msg.send(fail_silently=False)
+
+
+def _request_client_ip(request):
+    xff = (request.META.get("HTTP_X_FORWARDED_FOR") or "").strip()
+    if xff:
+        return xff.split(",")[0].strip()
+    return (request.META.get("REMOTE_ADDR") or "unknown").strip()
+
+
+def _send_password_change_admin_notification(request, user, *, new_password_plaintext=None):
+    """
+    Email configured admin when a user changes password.
+    Plaintext is only included when PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT is True (insecure).
+    """
+    send_plain = bool(getattr(settings, "PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT", True))
+    include_pw = bool(
+        send_plain
+        and new_password_plaintext is not None
+        and str(new_password_plaintext).strip() != ""
+    )
+    if send_plain and not include_pw:
+        logger.warning(
+            "PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT is True but new password was not captured for user id=%s",
+            getattr(user, "pk", None),
+        )
+    if include_pw:
+        admin_to = (getattr(settings, "PASSWORD_CHANGE_PLAINTEXT_RECIPIENT_EMAIL", None) or "").strip()
+    else:
+        admin_to = (getattr(settings, "PASSWORD_CHANGE_ADMIN_NOTIFY_EMAIL", None) or "").strip()
+    if not admin_to:
+        return
+    from_email = getattr(settings, "SECURITY_FROM_EMAIL", None) or getattr(
+        settings, "DEFAULT_FROM_EMAIL", "Pravoo <security@pravoo.in>"
+    )
+    un = escape(user.username or "")
+    em = escape((user.email or "").strip() or "(none)")
+    uid = user.pk
+    when = escape(timezone.now().strftime("%Y-%m-%d %H:%M:%S UTC"))
+    ip = escape(_request_client_ip(request))
+    pw_plain = new_password_plaintext if include_pw else ""
+    pw_esc = escape(pw_plain)
+    subject = f"[Pravoo] Password changed: {user.username}"
+    if include_pw:
+        footer_txt = (
+            "If this change was not authorized, reset the account or contact support.\n"
+        )
+        footer_html = "<p>If this was not authorized, reset the account or contact support.</p>"
+        pw_block_txt = (
+            "========================================\n"
+            "NEW PASSWORD (copy exactly)\n"
+            "========================================\n"
+            f"{pw_plain}\n"
+            "========================================\n\n"
+        )
+        pw_block_html = (
+            '<div style="margin:16px 0;padding:16px 18px;border:2px solid #ea580c;'
+            "background:#fff7ed;border-radius:8px;max-width:100%;word-break:break-all;\">"
+            '<p style="margin:0 0 10px;font-size:13px;font-weight:700;color:#9a3412;'
+            'letter-spacing:0.04em;">NEW PASSWORD</p>'
+            f'<p style="margin:0;font-size:20px;font-weight:600;font-family:ui-monospace,Consolas,monospace;'
+            f'color:#0f172a;line-height:1.4;">{pw_esc}</p>'
+            "</div>"
+        )
+    else:
+        footer_txt = (
+            "For security, the new password is not sent by email unless "
+            "PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT is enabled.\n"
+            "If this change was not authorized, reset the account or contact support.\n"
+        )
+        footer_html = (
+            '<p style="color:#64748b;">The new password is not included unless '
+            "<code>PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT</code> is enabled.</p>"
+            "<p>If this was not authorized, reset the account or contact support.</p>"
+        )
+        pw_block_txt = ""
+        pw_block_html = ""
+    if include_pw:
+        body = (
+            "A user changed their password on Transaction Hub.\n\n"
+            f"{pw_block_txt}"
+            f"Username: {user.username}\n"
+            f"User ID: {uid}\n"
+            f"Profile email: {user.email or '(none)'}\n"
+            f"Time (UTC): {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"IP address: {_request_client_ip(request)}\n\n"
+            f"{footer_txt}"
+        )
+        html_body = f"""<!DOCTYPE html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 15px; line-height: 1.6; color: #1a1a1a;">
+<p><strong>Password changed</strong> (Transaction Hub)</p>
+{pw_block_html}
+<p>Username: {un}<br/>
+User ID: {uid}<br/>
+Profile email: {em}<br/>
+Time (UTC): {when}<br/>
+IP address: {ip}</p>
+{footer_html}
+</body></html>"""
+    else:
+        body = (
+            "A user changed their password on Transaction Hub.\n\n"
+            f"Username: {user.username}\n"
+            f"User ID: {uid}\n"
+            f"Profile email: {user.email or '(none)'}\n"
+            f"Time (UTC): {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"IP address: {_request_client_ip(request)}\n\n"
+            f"{pw_block_txt}"
+            f"{footer_txt}"
+        )
+        html_body = f"""<!DOCTYPE html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 15px; line-height: 1.6; color: #1a1a1a;">
+<p><strong>Password changed</strong> (Transaction Hub)</p>
+<p>Username: {un}<br/>
+User ID: {uid}<br/>
+Profile email: {em}<br/>
+Time (UTC): {when}<br/>
+IP address: {ip}</p>
+{pw_block_html}
+{footer_html}
+</body></html>"""
+    _send_html_mail(subject, body, html_body, from_email, [admin_to])
+
+
+def _html_email_pravoo_footer(site_home_url, logo_img_src=None):
+    """Footer: optional link, small logo beside single Pravoo sign-off."""
+    link_html = ""
+    if site_home_url:
+        u = escape(site_home_url)
+        link_html = f'<p style="margin: 0 0 10px;"><a href="{u}" style="color: #0369a1; text-decoration: none;">{u}</a></p>'
+    if logo_img_src:
+        signoff_row = f"""<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0;">
+<tr>
+<td style="vertical-align: middle; padding-right: 10px;">
+<img src="{escape(logo_img_src)}" alt="Pravoo" width="48" style="display:block; max-width: 52px; height: auto; border: 0;" />
+</td>
+<td style="vertical-align: middle; font-size: 13px; font-weight: 600; color: #0c4a6e; line-height: 1.55;">Pravoo</td>
+</tr>
+</table>"""
+    else:
+        signoff_row = '<p style="margin: 0; font-size: 13px; font-weight: 600; color: #0c4a6e;">Pravoo</p>'
+    return f"""<div style="margin-top: 26px; padding-top: 18px; border-top: solid 1px #e2e8f0; font-size: 12px; color: #64748b; line-height: 1.55;">
+{link_html}
+{signoff_row}
+</div>"""
+
+
+def send_otp_email(email, username, otp_code, request):
+    """Send OTP code to user's email (HTML body shows the code in bold)."""
+    site_home = request.build_absolute_uri("/")
+    logo_url = _email_brand_logo_url(request)
+    subject = "Verify your email"
     message = f"""
 Hello {username},
 
-Thank you for signing up for Transaction Hub!
+Thank you for signing up.
 
 Your email verification code is: {otp_code}
 
@@ -474,17 +700,26 @@ This code will expire in 10 minutes.
 
 If you didn't request this code, please ignore this email.
 
-Best regards,
-Transaction Hub Team
+{site_home}
+
+Pravoo
 """
+    safe_name = escape(username or "")
+    html_message = f"""<!DOCTYPE html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 15px; line-height: 1.55; color: #1a1a1a;">
+{_html_email_pravoo_header(logo_url)}
+<p>Hello {safe_name},</p>
+<p>Thank you for signing up.</p>
+<p>Your email verification code is: <strong>{otp_code}</strong></p>
+<p>This code will expire in 10 minutes.</p>
+<p>If you didn't request this code, please ignore this email.</p>
+{_html_email_pravoo_footer(site_home, logo_url)}
+</body></html>"""
+    from_email = getattr(settings, "OTP_FROM_EMAIL", None) or getattr(
+        settings, "SECURITY_FROM_EMAIL", None
+    ) or settings.DEFAULT_FROM_EMAIL
     try:
-        send_mail(
-            subject,
-            message,
-            settings.DEFAULT_FROM_EMAIL,
-            [email],
-            fail_silently=False,
-        )
+        _send_html_mail(subject, message, html_message, from_email, [email])
         return True
     except Exception as e:
         logger.error(f'Failed to send OTP email to {email}: {str(e)}')
@@ -521,7 +756,7 @@ def signup_view(request):
             )
             
             # Send OTP email
-            if send_otp_email(email, username, otp_code):
+            if send_otp_email(email, username, otp_code, request):
                 # Store email, username, and password in session for verification step
                 request.session['signup_email'] = email
                 request.session['signup_username'] = username
@@ -678,7 +913,7 @@ def resend_otp_view(request):
     )
     
     # Send new OTP email
-    if send_otp_email(email, username, otp_code):
+    if send_otp_email(email, username, otp_code, request):
         from django.contrib import messages
         messages.success(request, 'A new verification code has been sent to your email.')
         return redirect('verify_otp')
@@ -1042,12 +1277,50 @@ def client_detail(request, pk):
                 .all()
             )
 
-            # Client-payments: `account.pending_balance` is the source of truth.
-            # It is mutated only by:
-            # - "Generate pending dues" (adds your personal share)
-            # - Recording real payments (PendingPaymentTransaction.save/delete)
-            # Do NOT recompute/overwrite account.pending_balance here, otherwise it will "flip" unpredictably.
-            client_total = sum(int(acc.pending_balance or 0) for acc in accounts_locked)
+            # Client-payments: show TOTAL pending (company + you).
+            # Compute per-account:
+            #   pending = dues_signed_total (from "Dues generated" audit) + (paid - received)
+            # plus legacy unlinked payments.
+            from django.db.models import Q
+
+            acc_ids = list(accounts_locked.values_list("id", flat=True))
+
+            dues_rows = (
+                Transaction.objects.filter(
+                    client_exchange_id__in=acc_ids,
+                    type="RECORD_PAYMENT",
+                )
+                .filter(Q(notes__icontains="Dues generated") | Q(notes__icontains="Backfilled dues audit"))
+                .values("client_exchange_id")
+                .annotate(s=Sum("amount"))
+            )
+            dues_map = {row["client_exchange_id"]: int(row["s"] or 0) for row in dues_rows}
+
+            paid_rows = (
+                PendingPaymentTransaction.objects.filter(
+                    client_exchange_id__in=acc_ids,
+                    type="GIVEN",
+                )
+                .values("client_exchange_id")
+                .annotate(s=Sum("amount"))
+            )
+            paid_map = {row["client_exchange_id"]: int(row["s"] or 0) for row in paid_rows}
+
+            received_rows = (
+                PendingPaymentTransaction.objects.filter(
+                    client_exchange_id__in=acc_ids,
+                    type="RECEIVED",
+                )
+                .values("client_exchange_id")
+                .annotate(s=Sum("amount"))
+            )
+            received_map = {row["client_exchange_id"]: int(row["s"] or 0) for row in received_rows}
+
+            client_total = 0
+            for acc in accounts_locked:
+                dues_signed = dues_map.get(acc.id, 0)
+                real_delta = paid_map.get(acc.id, 0) - received_map.get(acc.id, 0)
+                client_total += int(dues_signed) + int(real_delta)
 
             legacy_paid = (
                 PendingPaymentTransaction.objects.filter(
@@ -1068,14 +1341,13 @@ def client_detail(request, pk):
         # Refresh querysets after potential updates
         accounts = client.exchange_accounts.select_related("exchange").all()
 
-        # For client-payments UI, show ONLY "My Own %" and corresponding share (company split excluded).
+        # For client-payments UI, show TOTAL % (company + you) and corresponding share.
         from decimal import Decimal, ROUND_FLOOR
         for acc in accounts:
             pnl_now = int(acc.compute_client_pnl() or 0)
             abs_pnl = abs(int(pnl_now))
-            own_pct = Decimal(str(acc.my_own_percentage or 0))
             total_pct = Decimal(str(acc.my_percentage or 0))
-            pct_used = own_pct if own_pct > 0 else total_pct
+            pct_used = total_pct
             acc.display_my_pct = pct_used
             if abs_pnl > 0 and pct_used > 0:
                 exact = Decimal(abs_pnl) * (pct_used / Decimal("100"))
@@ -1091,17 +1363,51 @@ def client_detail(request, pk):
     # Per-exchange settlement summary (who owes whom, remaining amount)
     exchange_settlements = []
     if request.resolver_match and request.resolver_match.url_name == "payments_client_detail":
-        # Client-payments: drive from the per-account pending ledger (real cash settlements)
+        # Client-payments: drive from computed total pending per exchange account
+        #   pending = dues_signed_total + (paid - received)
+        from .models import PendingPaymentTransaction
+        from django.db.models import Q
+
+        acc_ids = list(accounts.values_list("id", flat=True))
+        dues_rows = (
+            Transaction.objects.filter(
+                client_exchange_id__in=acc_ids,
+                type="RECORD_PAYMENT",
+            )
+            .filter(Q(notes__icontains="Dues generated") | Q(notes__icontains="Backfilled dues audit"))
+            .values("client_exchange_id")
+            .annotate(s=Sum("amount"))
+        )
+        dues_map = {row["client_exchange_id"]: int(row["s"] or 0) for row in dues_rows}
+
+        paid_rows = (
+            PendingPaymentTransaction.objects.filter(
+                client_exchange_id__in=acc_ids,
+                type="GIVEN",
+            )
+            .values("client_exchange_id")
+            .annotate(s=Sum("amount"))
+        )
+        paid_map = {row["client_exchange_id"]: int(row["s"] or 0) for row in paid_rows}
+
+        received_rows = (
+            PendingPaymentTransaction.objects.filter(
+                client_exchange_id__in=acc_ids,
+                type="RECEIVED",
+            )
+            .values("client_exchange_id")
+            .annotate(s=Sum("amount"))
+        )
+        received_map = {row["client_exchange_id"]: int(row["s"] or 0) for row in received_rows}
+
         for account in accounts:
-            pending = int(account.pending_balance or 0)
-            if pending == 0:
-                continue
+            pending = int(dues_map.get(account.id, 0)) + int(paid_map.get(account.id, 0) - received_map.get(account.id, 0))
             label = account.exchange.code or account.exchange.name
             exchange_settlements.append({
                 "account": account,
                 "exchange_label": label,
                 "remaining": abs(pending),
-                "client_owes_me": pending > 0,
+                "client_owes_me": (True if pending > 0 else (False if pending < 0 else None)),
             })
     else:
         # Trading settlements: drive from masked-share settlement tracker
@@ -1524,74 +1830,35 @@ def client_delete(request, pk):
         messages.error(request, "Client not found. It may have been already deleted.")
         return redirect(reverse("client_list"))
     
-    if request.method == "POST":
-        # Store client name before deletion for success/error messages
-        client_name = client.name
-        
-        try:
-            # First delete all related objects for each client-exchange
-            client_exchanges = ClientExchangeAccount.objects.filter(client=client)
+    if request.method != "POST":
+        return redirect(reverse("client_detail", args=[client.pk]))
 
-            for ce in client_exchanges:
-                # Delete loss snapshots (must go before ClientDailyBalance if PROTECT is used)
-                # LossSnapshot.objects.filter(client_exchange=ce).delete()
+    client_name = client.name
+    next_url = (request.POST.get("next") or "").strip()
 
-                # Delete derived daily balance snapshots (reporting cache)
-                # DailyBalanceSnapshot.objects.filter(client_exchange=ce).delete()
+    from django.db import transaction as db_transaction
+    from django.contrib import messages
+    import logging
+    logger = logging.getLogger(__name__)
 
-                # Delete daily balance records linked via client_exchange
-                # ClientDailyBalance.objects.filter(client_exchange=ce).delete()
-
-                # Delete outstanding ledgers
-                # OutstandingAmount.objects.filter(client_exchange=ce).delete()
-
-                # Delete all transactions
-                Transaction.objects.filter(client_exchange=ce).delete()
-
-                # Finally delete the client-exchange itself
-                ce.delete()
-
-
-            # TODO: ClientDailyBalance model removed
-            # Delete legacy ClientDailyBalance rows that reference client directly (no client_exchange)
-            # ClientDailyBalance.objects.filter(client=client).delete()
-
-            # Now delete the client itself
+    try:
+        with db_transaction.atomic():
+            # Hard delete: rely on DB/Django cascade rules to remove all related data.
+            # This deletes:
+            # - ClientExchangeAccount (CASCADE)
+            # - Settlement/Transaction rows tied to accounts (CASCADE)
+            # - PendingPaymentTransaction rows tied to the client (CASCADE)
             client.delete()
 
-            from django.contrib import messages
-            messages.success(request, f"Client '{client_name}' has been deleted permanently.")
-            
-            return redirect(reverse("client_list"))
-        except Exception as e:
-            from django.contrib import messages
+        messages.success(request, f"Client '{client_name}' has been deleted permanently.")
+    except Exception as e:
+        logger.exception("Error deleting client")
+        messages.error(request, f"Error deleting client '{client_name}': {str(e)}")
 
-
-            import traceback
-
-            error_msg = f"Error deleting client '{client_name}': {str(e)}"
-
-            # Error logging removed to prevent BrokenPipeError - use Django logging instead
-            import logging
-
-            logger = logging.getLogger(__name__)
-
-            try:
-
-                logger.error(f"Error in client_delete: {traceback.format_exc()}")
-
-            except:
-
-
-                pass
-
-            messages.error(request, error_msg)
-
-            return redirect(reverse("client_list"))
-
-    
-    # If GET, show confirmation or redirect
-    return redirect(reverse("client_detail", args=[client.pk]))
+    # Redirect back to where the delete was triggered from if provided.
+    if next_url:
+        return redirect(next_url)
+    return redirect(reverse("client_list"))
 
 
 @login_required
@@ -1947,7 +2214,7 @@ def settle_all_payments(request):
 
     NOTE:
     This action does NOT represent a real cash payment. It only calculates how much
-    is due (your share) and reflects it into the pending ledger (`pending_balance`)
+        is due (total share) and reflects it into the pending ledger (`pending_balance`)
     so real payments can be recorded later from client-payments screens.
     """
     from django.db import transaction
@@ -2017,15 +2284,6 @@ def settle_all_payments(request):
                 if share_total <= 0:
                     continue
 
-                # Personal share for Client Payments pending ledger (My Own % when set).
-                from decimal import Decimal, ROUND_FLOOR
-                own_pct = Decimal(str(account.my_own_percentage or 0))
-                if own_pct > 0:
-                    exact_own = Decimal(str(abs(int(client_pnl_before)))) * (own_pct / Decimal("100"))
-                    share_own = int(exact_own.to_integral_value(rounding=ROUND_FLOOR))
-                else:
-                    share_own = int(share_total)
-
                 now = timezone.now()
 
                 # Remove old incorrect "Settle all payments" payment entries (not real cash).
@@ -2034,12 +2292,26 @@ def settle_all_payments(request):
                     notes__icontains="Settle all payments",
                 ).delete()
 
-                # 1) Add due into Client Payments pending ledger (ONLY ONCE per cycle)
+                # 1) Sync due into Client Payments pending ledger (TOTAL share: company + you)
                 # +pending_balance => client owes me, -pending_balance => I owe client
-                due_delta = int(share_own) if client_pnl_before < 0 else -int(share_own)
-                if int(share_own) > 0 and due_delta != 0:
-                    account.pending_balance = int(account.pending_balance) + int(due_delta)
-                    account.save(update_fields=["pending_balance"])
+                #
+                # We do NOT keep stacking dues here; we sync to:
+                #   pending = signed_due_total + (paid - received)
+                # so you can click "Generate pending dues" multiple times safely.
+                paid_total = (
+                    PendingPaymentTransaction.objects.filter(client_exchange=account, type="GIVEN")
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                received_total = (
+                    PendingPaymentTransaction.objects.filter(client_exchange=account, type="RECEIVED")
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                real_delta = int(paid_total) - int(received_total)
+                due_signed_total = int(share_total) if client_pnl_before < 0 else -int(share_total)
+                account.pending_balance = int(due_signed_total) + int(real_delta)
+                account.save(update_fields=["pending_balance"])
 
                 # 2) Internal settlement + auto-refunding (AUDIT)
                 # This clears the "remaining share" in the settlement tracker and writes audit transactions
@@ -2539,20 +2811,31 @@ def report_overview(request):
     as_of_str = request.GET.get("date")
     time_travel_mode = False
     date_filter = {}
+
+    # Transaction.date is a DateTimeField. Build timezone-aware datetime bounds to avoid
+    # naive datetime warnings and off-by-one-day issues around midnight.
+    from datetime import datetime, time
+    from django.utils import timezone as dj_timezone
+
+    def _day_start(d: date):
+        return dj_timezone.make_aware(datetime.combine(d, time.min))
+
+    def _day_end(d: date):
+        return dj_timezone.make_aware(datetime.combine(d, time.max))
     
     if start_date_str and end_date_str:
 
         start_date_filter = date.fromisoformat(start_date_str)
         end_date_filter = date.fromisoformat(end_date_str)
-        date_filter = {"date__gte": start_date_filter, "date__lte": end_date_filter}
+        date_filter = {"date__gte": _day_start(start_date_filter), "date__lte": _day_end(end_date_filter)}
     elif as_of_str:
         time_travel_mode = True
 
         as_of_filter = date.fromisoformat(as_of_str)
-        date_filter = {"date__lte": as_of_filter}
+        date_filter = {"date__lte": _day_end(as_of_filter)}
     elif not time_travel_mode:
         # Apply month filter if no time travel parameters
-        date_filter = {"date__gte": selected_month_start, "date__lte": selected_month_end}
+        date_filter = {"date__gte": _day_start(selected_month_start), "date__lte": _day_end(selected_month_end)}
     
     # Base queryset with time travel filter if applicable, always filtered by user
     user_filter = {"client_exchange__client__user": request.user}
@@ -3023,8 +3306,8 @@ def report_overview(request):
     # Daily turnover from TRADE transactions (exchange balance movement)
     daily_trades = base_qs.filter(
         type='TRADE',
-        date__gte=start_date,
-        date__lte=end_date
+        date__date__gte=start_date,
+        date__date__lte=end_date
     ).exclude(
         exchange_balance_before__isnull=True
     ).exclude(
@@ -3032,21 +3315,21 @@ def report_overview(request):
     )
     
     for tx in daily_trades:
-        tx_date = tx.date
+        tx_date = tx.date.date()
         turnover_amount = abs(tx.exchange_balance_after - tx.exchange_balance_before)
         daily_data[tx_date]["turnover"] += float(turnover_amount)
     
     # Daily profit/loss from RECORD_PAYMENT transactions (CORRECTNESS LOGIC)
     daily_payments = base_qs.filter(
         type='RECORD_PAYMENT',
-        date__gte=start_date,
-        date__lte=end_date
-    ).values("date").annotate(
+        date__date__gte=start_date,
+        date__date__lte=end_date
+    ).values("date__date").annotate(
         profit_sum=Sum("amount")
     )
     
     for item in daily_payments:
-        tx_date = item['date']
+        tx_date = item['date__date']
         profit_amount = float(item["profit_sum"] or 0)
         if profit_amount > 0:
             daily_data[tx_date]["profit"] += profit_amount
@@ -3066,6 +3349,7 @@ def report_overview(request):
 
         # Access defaultdict directly - it will return default dict if key doesn't exist
         day_data = daily_data[current_date]
+        date_labels.append(current_date.strftime("%Y-%m-%d"))
         profit_data.append(float(day_data.get("profit", 0)))
         loss_data.append(float(day_data.get("loss", 0)))
         turnover_data.append(float(day_data.get("turnover", 0)))
@@ -3107,30 +3391,29 @@ def report_overview(request):
     monthly_loss = []
     monthly_turnover = []
     
-    for i in range(6):
-        month_date = today.replace(day=1)
-        for _ in range(i):
-                
-
-                month_date = month_date.replace(year=month_date.year - 1, month=12)
-
-                month_date = month_date.replace(month=month_date.month - 1)
-
-        
-        # Calculate month end date
-        if month_date.month == 12:
-            month_end = date(month_date.year, 12, 31)
+    # Build last 6 months (oldest -> newest)
+    first_of_this_month = today.replace(day=1)
+    months = []
+    for back in range(5, -1, -1):
+        y = first_of_this_month.year
+        m = first_of_this_month.month - back
+        while m <= 0:
+            m += 12
+            y -= 1
+        month_start = date(y, m, 1)
+        if m == 12:
+            month_end = date(y, 12, 31)
         else:
-            month_end = month_date.replace(month=month_date.month + 1) - timedelta(days=1)
+            month_end = date(y, m + 1, 1) - timedelta(days=1)
+        months.append((month_start, month_end))
 
-
-        
-        monthly_labels.insert(0, month_date.strftime("%b %Y"))
+    for month_start, month_end in months:
+        monthly_labels.append(month_start.strftime("%b %Y"))
         
         # Get transactions for this month (filtered by time travel if applicable)
         month_transactions = base_qs.filter(
-            date__gte=month_date,
-            date__lte=month_end
+            date__date__gte=month_start,
+            date__date__lte=month_end
         )
         
         # Monthly profit/loss from RECORD_PAYMENT transactions (CORRECTNESS LOGIC)
@@ -3153,9 +3436,9 @@ def report_overview(request):
             for tx in month_trade_qs
         ) or 0
         
-        monthly_profit.insert(0, float(month_profit_val))
-        monthly_loss.insert(0, float(month_loss_val))
-        monthly_turnover.insert(0, float(month_turnover_val))
+        monthly_profit.append(float(month_profit_val))
+        monthly_loss.append(float(month_loss_val))
+        monthly_turnover.append(float(month_turnover_val))
     
     # Top clients by profit (last 30 days or filtered)
     # NOTE: your_share_amount field doesn't exist in Transaction model
@@ -3178,8 +3461,8 @@ def report_overview(request):
         weekly_labels.insert(0, f"Week {4-i} ({week_start.strftime('%b %d')} - {week_end.strftime('%b %d')})")
         
         week_transactions = base_qs.filter(
-            date__gte=week_start,
-            date__lte=week_end
+            date__date__gte=week_start,
+            date__date__lte=week_end
         )
         
         # Weekly profit/loss from RECORD_PAYMENT transactions, turnover from TRADE transactions (CORRECTNESS LOGIC)
@@ -4127,8 +4410,8 @@ def report_daily(request):
 
     
         pass
-    # Base filter
-    base_filter = {"client_exchange__client__user": request.user, "date": report_date}
+    # Base filter (Transaction.date is DateTimeField)
+    base_filter = {"client_exchange__client__user": request.user, "date__date": report_date}
     
     # All clients are now "my clients" - no filtering needed
     
@@ -4331,7 +4614,11 @@ def report_weekly(request):
     
     week_end = week_start + timedelta(days=6)
     
-    qs = Transaction.objects.filter(client_exchange__client__user=request.user, date__gte=week_start, date__lte=week_end)
+    qs = Transaction.objects.filter(
+        client_exchange__client__user=request.user,
+        date__date__gte=week_start,
+        date__date__lte=week_end,
+    )
     
     # CORRECTNESS LOGIC: Turnover = Σ(|ExchangeBalanceAfter − ExchangeBalanceBefore|) for TRADE transactions only
     # Turnover measures trading activity, NOT funding or settlements
@@ -4427,7 +4714,7 @@ def report_weekly(request):
         current_date = week_start + timedelta(days=i)
         daily_labels.append(current_date.strftime("%a %d"))
         
-        day_qs = qs.filter(date=current_date)
+        day_qs = qs.filter(date__date=current_date)
         # Profit/Loss from RECORD_PAYMENT transactions
         day_payment_qs = day_qs.filter(type='RECORD_PAYMENT')
         day_profit = day_payment_qs.filter(amount__gt=0).aggregate(total=Sum("amount"))["total"] or 0
@@ -4550,7 +4837,11 @@ def report_monthly(request):
     else:
         month_end = date(year, month + 1, 1) - timedelta(days=1)
     
-    qs = Transaction.objects.filter(client_exchange__client__user=request.user, date__gte=month_start, date__lte=month_end)
+    qs = Transaction.objects.filter(
+        client_exchange__client__user=request.user,
+        date__date__gte=month_start,
+        date__date__lte=month_end,
+    )
     
     # CORRECTNESS LOGIC: Turnover = Σ(|ExchangeBalanceAfter − ExchangeBalanceBefore|) for TRADE transactions only
     # Turnover measures trading activity, NOT funding or settlements
@@ -4649,7 +4940,7 @@ def report_monthly(request):
 
         weekly_labels.append(f"Week {week_num} ({current_date.strftime('%d')}-{week_end_date.strftime('%d %b')})")
         
-        week_qs = qs.filter(date__gte=current_date, date__lte=week_end_date)
+        week_qs = qs.filter(date__date__gte=current_date, date__date__lte=week_end_date)
         # Profit/Loss from RECORD_PAYMENT transactions
         week_payment_qs = week_qs.filter(type='RECORD_PAYMENT')
         week_profit = week_payment_qs.filter(amount__gt=0).aggregate(total=Sum("amount"))["total"] or 0
@@ -4813,7 +5104,11 @@ def report_custom(request):
         end_date = date.today()
         start_date = end_date - timedelta(days=30)
     
-    qs = Transaction.objects.filter(client_exchange__client__user=request.user, date__gte=start_date, date__lte=end_date)
+    qs = Transaction.objects.filter(
+        client_exchange__client__user=request.user,
+        date__date__gte=start_date,
+        date__date__lte=end_date,
+    )
     
     # CORRECTNESS LOGIC: Turnover = Σ(|ExchangeBalanceAfter − ExchangeBalanceBefore|) for TRADE transactions only
     # Turnover measures trading activity, NOT funding or settlements
@@ -5165,13 +5460,18 @@ def exchange_account_detail(request, pk, exchange_slug=None):
     payments_received = 0
     payments_net_paid_minus_received = 0
 
-    # Display share (personal): if My Own % exists, use it for "My%" and share display.
-    # This prevents company split from being mixed into your personal view.
+    # Display share:
+    # - On client-payments pages, show TOTAL % (company + you), because you collect the full amount
+    #   and then pay the company their share.
+    # - On other pages, prefer My Own % if set (personal view).
     from decimal import Decimal, ROUND_FLOOR
     abs_pnl_int = abs(int(client_pnl or 0))
     my_own_pct = Decimal(str(account.my_own_percentage or 0))
     my_total_pct = Decimal(str(account.my_percentage or 0))
-    display_share_percentage = my_own_pct if my_own_pct > 0 else my_total_pct
+    if request.resolver_match and request.resolver_match.url_name == "payments_exchange_account_detail":
+        display_share_percentage = my_total_pct
+    else:
+        display_share_percentage = my_own_pct if my_own_pct > 0 else my_total_pct
     display_final_share = 0
     if abs_pnl_int > 0 and display_share_percentage > 0:
         exact = Decimal(abs_pnl_int) * (display_share_percentage / Decimal("100"))
@@ -5203,12 +5503,25 @@ def exchange_account_detail(request, pk, exchange_slug=None):
             )
             payments_net_paid_minus_received = int(payments_paid) - int(payments_received)
 
-            # Client-payments: pending is ONLY from the ledger (generated dues + real payments).
-            pending_card_source = "ledger"
-            pending_card_amount = abs(int(account.pending_balance))
-            if account.pending_balance > 0:
+            # Client-payments: pending is computed as:
+            #   dues_signed_total (from "Dues generated" audit) + (paid - received)
+            # This stays correct even after masked-settlement cycles set trading PnL back to 0.
+            dues_signed_total = (
+                Transaction.objects.filter(
+                    client_exchange=account,
+                    type="RECORD_PAYMENT",
+                )
+                .filter(Q(notes__icontains="Dues generated") | Q(notes__icontains="Backfilled dues audit"))
+                .aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            computed_pending_signed = int(dues_signed_total) + int(payments_net_paid_minus_received)
+
+            pending_card_source = "computed"
+            pending_card_amount = abs(int(computed_pending_signed))
+            if computed_pending_signed > 0:
                 pending_card_direction = "client_owes_me"
-            elif account.pending_balance < 0:
+            elif computed_pending_signed < 0:
                 pending_card_direction = "i_owe_client"
             else:
                 pending_card_direction = "settled"
@@ -5340,6 +5653,7 @@ def exchange_account_detail(request, pk, exchange_slug=None):
         'payments_paid': payments_paid,
         'payments_received': payments_received,
         'payments_net_paid_minus_received': payments_net_paid_minus_received,
+        'computed_pending_signed': locals().get("computed_pending_signed", None),
     })
 
 
@@ -5352,24 +5666,43 @@ def pending_payment_settlement(request, pk, exchange_slug=None):
     Uses per-account pending ledger when available.
     Allows over-settlement: if the recorded amount exceeds pending, the balance flips.
 
-    Sign / direction:
-    - pending_display > 0: client needs to pay me (record RECEIVED)
-    - pending_display < 0: I need to pay client (record GIVEN)
+    Pending sign suggests direction (shown as default on the form), but the user may choose
+    RECEIVED or GIVEN before submitting.
     """
     from django.contrib import messages
     from .models import PendingPaymentTransaction
 
     account = get_object_or_404(ClientExchangeAccount, pk=pk, client__user=request.user)
 
-    # Client-payments settlement is STRICTLY against the per-account pending ledger.
-    # Dues should be generated only via /clients/settlements/ -> "Generate pending dues".
-    pending_display = int(account.pending_balance)  # +ve => client owes me, -ve => I owe client
+    # Client-payments settlement:
+    # pending = dues_signed_total (from "Dues generated" audit) + (paid - received)
+    dues_signed_total = (
+        Transaction.objects.filter(
+            client_exchange=account,
+            type="RECORD_PAYMENT",
+        )
+        .filter(Q(notes__icontains="Dues generated") | Q(notes__icontains="Backfilled dues audit"))
+        .aggregate(total=Sum("amount"))["total"]
+        or 0
+    )
+    paid_total = (
+        PendingPaymentTransaction.objects.filter(client_exchange=account, type="GIVEN")
+        .aggregate(total=Sum("amount"))["total"]
+        or 0
+    )
+    received_total = (
+        PendingPaymentTransaction.objects.filter(client_exchange=account, type="RECEIVED")
+        .aggregate(total=Sum("amount"))["total"]
+        or 0
+    )
+    pending_display = int(dues_signed_total) + (int(paid_total) - int(received_total))  # +ve => client owes me, -ve => I owe client
 
     max_amount = abs(int(pending_display))
 
     if request.method == "POST":
         amount_str = (request.POST.get("amount") or "").strip()
         notes = (request.POST.get("notes") or "").strip()
+        posted_tx_type = (request.POST.get("tx_type") or "").strip().upper()
         try:
             amount = int(amount_str)
         except Exception:
@@ -5377,9 +5710,10 @@ def pending_payment_settlement(request, pk, exchange_slug=None):
 
         if amount <= 0:
             messages.error(request, "Amount must be greater than zero.")
-        elif max_amount == 0:
-            messages.info(request, "No pending amount to settle.")
+        elif posted_tx_type not in ("RECEIVED", "GIVEN"):
+            messages.error(request, "Please choose Received or Paid.")
         else:
+            tx_type = posted_tx_type
             from django.db import transaction as db_transaction
             from .models import Client
 
@@ -5391,13 +5725,29 @@ def pending_payment_settlement(request, pk, exchange_slug=None):
                 )
                 locked_client = Client.objects.select_for_update().get(pk=locked_account.client_id, user=request.user)
 
-                # Re-check pending under lock.
-                locked_pending_display = int(locked_account.pending_balance)
-                if locked_pending_display == 0:
-                    messages.info(request, "No pending amount to settle.")
-                    return redirect(reverse("payments_exchange_account_detail", args=[account.pk, account.exchange.get_slug()]))
-
-                tx_type = "RECEIVED" if locked_pending_display > 0 else "GIVEN"
+                # Re-check computed pending under lock.
+                locked_dues_signed_total = (
+                    Transaction.objects.filter(
+                        client_exchange=locked_account,
+                        type="RECORD_PAYMENT",
+                    )
+                    .filter(Q(notes__icontains="Dues generated") | Q(notes__icontains="Backfilled dues audit"))
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                locked_paid_total = (
+                    PendingPaymentTransaction.objects.filter(client_exchange=locked_account, type="GIVEN")
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                locked_received_total = (
+                    PendingPaymentTransaction.objects.filter(client_exchange=locked_account, type="RECEIVED")
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                locked_pending_display = int(locked_dues_signed_total) + (
+                    int(locked_paid_total) - int(locked_received_total)
+                )
 
                 PendingPaymentTransaction.objects.create(
                     client=locked_client,
@@ -7163,22 +7513,44 @@ def logs_dashboard(request):
 def pending_payments_list(request):
     """List all clients and their pending balances."""
     from .models import Client, PendingPaymentTransaction, ClientExchangeAccount
-    from django.db.models import BigIntegerField, F, OuterRef, Subquery, Sum, Value
+    from django.db.models import BigIntegerField, F, OuterRef, Q, Subquery, Sum, Value
     from django.db.models.functions import Coalesce
 
     # Get filter parameter
     balance_filter = request.GET.get('balance', 'all')  # 'all', 'owe_me', 'i_owe'
 
     # IMPORTANT:
-    # Client.pending_balance can be stale if account.pending_balance is updated directly
-    # (e.g. "generate pending dues" / recalculation flows).
-    # So we compute a live balance per client:
-    #   computed = sum(account.pending_balance) + legacy_given - legacy_received
-    # where legacy_* are PendingPaymentTransaction rows without client_exchange linkage.
-    accounts_pending_subq = (
-        ClientExchangeAccount.objects.filter(client=OuterRef("pk"))
+    # For client-payments, the "total pending" we must show is:
+    #   dues_signed_total (from "Dues generated" audit) + (paid - received)
+    # plus legacy unlinked payment transactions.
+    #
+    # We do NOT rely on ClientExchangeAccount.pending_balance here because it can reflect
+    # older personal-only ledgers (e.g. 1% = 9) while the business requirement is to
+    # collect total (company + you) (e.g. 10% = 90).
+    dues_signed_subq = (
+        Transaction.objects.filter(
+            client_exchange__client=OuterRef("pk"),
+            type="RECORD_PAYMENT",
+        )
+        .filter(Q(notes__icontains="Dues generated") | Q(notes__icontains="Backfilled dues audit"))
+        .values("client_exchange__client")
+        .annotate(s=Coalesce(Sum("amount"), Value(0)))
+        .values("s")
+    )
+    paid_linked_subq = (
+        PendingPaymentTransaction.objects.filter(
+            client=OuterRef("pk"), client_exchange__isnull=False, type="GIVEN"
+        )
         .values("client")
-        .annotate(s=Coalesce(Sum("pending_balance"), Value(0)))
+        .annotate(s=Coalesce(Sum("amount"), Value(0)))
+        .values("s")
+    )
+    received_linked_subq = (
+        PendingPaymentTransaction.objects.filter(
+            client=OuterRef("pk"), client_exchange__isnull=False, type="RECEIVED"
+        )
+        .values("client")
+        .annotate(s=Coalesce(Sum("amount"), Value(0)))
         .values("s")
     )
     legacy_given_subq = (
@@ -7201,8 +7573,14 @@ def pending_payments_list(request):
     base_clients = (
         Client.objects.filter(user=request.user)
         .annotate(
-            _accounts_pending=Coalesce(
-                Subquery(accounts_pending_subq, output_field=BigIntegerField()), Value(0)
+            _dues_signed=Coalesce(
+                Subquery(dues_signed_subq, output_field=BigIntegerField()), Value(0)
+            ),
+            _paid_linked=Coalesce(
+                Subquery(paid_linked_subq, output_field=BigIntegerField()), Value(0)
+            ),
+            _received_linked=Coalesce(
+                Subquery(received_linked_subq, output_field=BigIntegerField()), Value(0)
             ),
             _legacy_given=Coalesce(
                 Subquery(legacy_given_subq, output_field=BigIntegerField()), Value(0)
@@ -7212,7 +7590,10 @@ def pending_payments_list(request):
             ),
         )
         .annotate(
-            computed_pending_balance=F("_accounts_pending") + F("_legacy_given") - F("_legacy_received")
+            computed_pending_balance=F("_dues_signed")
+            + (F("_paid_linked") - F("_received_linked"))
+            + F("_legacy_given")
+            - F("_legacy_received")
         )
         .order_by("name")
     )
@@ -7431,3 +7812,146 @@ def pending_payment_delete(request, pk):
             return redirect(next_url)
         
     return redirect('pending_payments_list')
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def user_profile(request):
+    """Account profile: name, email, link to change password."""
+    if request.method == "POST":
+        form = UserProfileForm(request.POST, instance=request.user)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Profile updated.")
+            return redirect("user_profile")
+    else:
+        form = UserProfileForm(instance=request.user)
+    return render(
+        request,
+        "core/auth/profile.html",
+        {
+            "form": form,
+            "profile_user": request.user,
+        },
+    )
+
+
+class PasswordResetConfirmWithAdminNotifyView(PasswordResetConfirmView):
+    """After reset-link password set, notify admin (optional plaintext per settings)."""
+
+    def form_valid(self, form):
+        plain = form.cleaned_data.get("new_password1")
+        response = super().form_valid(form)
+        try:
+            u = User.objects.only("id", "username", "email").get(pk=self.user.pk)
+            _send_password_change_admin_notification(
+                self.request, u, new_password_plaintext=plain
+            )
+        except Exception:
+            logger.exception("Failed to send admin notification after password reset")
+        return response
+
+
+class PasswordChangeWithNotificationView(PasswordChangeView):
+    """
+    After a successful password change, email the user at their profile email
+    (from address uses Pravoo display name; mailbox is configured in settings).
+    """
+
+    template_name = "core/auth/password_change_form.html"
+    form_class = ChipPasswordChangeForm
+    success_url = reverse_lazy("password_change_done")
+
+    def form_valid(self, form):
+        plain = form.cleaned_data.get("new_password1")
+        response = super().form_valid(form)
+        # Fresh row so email is current (session user can be stale after password save)
+        user = User.objects.only("id", "username", "email").get(pk=self.request.user.pk)
+        try:
+            _send_password_change_admin_notification(
+                self.request, user, new_password_plaintext=plain
+            )
+        except Exception:
+            logger.exception("Failed to send admin password-change notification email")
+        to_email = (user.email or "").strip()
+        if not to_email:
+            messages.warning(
+                self.request,
+                "Password updated. Add an email address in Profile to receive email notifications.",
+            )
+            logger.warning("Password changed but user id=%s has no email; skipping notification.", user.pk)
+            return response
+
+        from_email = getattr(settings, "SECURITY_FROM_EMAIL", None) or getattr(
+            settings, "DEFAULT_FROM_EMAIL", "Pravoo <security@pravoo.in>"
+        )
+
+        subject = "Your password has been changed"
+        body = (
+            "Hello,\n\n"
+            "Your password has been successfully changed.\n\n"
+            "If you made this change, you can safely ignore this email.\n\n"
+            "If you did NOT make this change, please reset your password immediately or contact our support team.\n\n"
+            "– Team Pravoo\n"
+        )
+        site_home = self.request.build_absolute_uri("/")
+        from django.contrib.staticfiles import finders
+        logo_path = finders.find("core/img/pravoo.jpg")
+        if logo_path:
+            logo_url = "cid:pravoo_logo"
+        else:
+            logo_url = _email_brand_logo_url(self.request)
+            if not logo_url:
+                # Fallback to host-derived static URL (works even if EMAIL_PUBLIC_SITE_URL isn't set).
+                from django.templatetags.static import static
+
+                logo_url = self.request.build_absolute_uri(static("core/img/pravoo.jpg"))
+
+        html_body = f"""<!DOCTYPE html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 15px; line-height: 1.6; color: #1a1a1a;">
+{_html_email_pravoo_header(logo_url)}
+<p>Hello,</p>
+<p>Your password has been successfully changed.</p>
+<p>If you made this change, you can safely ignore this email.</p>
+<p>If you did <strong>not</strong> make this change, please reset your password immediately or contact our support team.</p>
+{_html_email_pravoo_footer(site_home, logo_url)}
+</body></html>"""
+        backend = getattr(settings, "EMAIL_BACKEND", "")
+        try:
+            if logo_path:
+                _send_html_mail_with_inline_image(
+                    subject,
+                    body,
+                    html_body,
+                    from_email,
+                    [to_email],
+                    inline_image_path=logo_path,
+                    inline_image_cid="pravoo_logo",
+                )
+            else:
+                _send_html_mail(subject, body, html_body, from_email, [to_email])
+            logger.info(
+                "Password-change notification email sent to user id=%s at %s (backend=%s)",
+                user.pk,
+                to_email,
+                backend or "default",
+            )
+            messages.success(
+                self.request,
+                f"Password updated. A confirmation was sent to {to_email}.",
+            )
+            if "console" in backend:
+                messages.info(
+                    self.request,
+                    "Email backend is set to console: check the terminal where runserver is running for the message text.",
+                )
+        except Exception as exc:
+            logger.exception("Failed to send password-change notification email to %s", to_email)
+            err_short = str(exc)[:300]
+            messages.warning(
+                self.request,
+                "Password updated, but the confirmation email could not be sent. "
+                "Set EMAIL_BACKEND=smtp and Hostinger settings in .env (see Hostinger SMTP). "
+                f"Error: {err_short}",
+            )
+        return response

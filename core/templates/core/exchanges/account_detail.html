@@ -102,7 +102,18 @@
         <div class="card">
             <div class="card-title">Pending payment</div>
             <div class="card-value">
-                {% if account.pending_balance %}
+                {% if computed_pending_signed is not None %}
+                    {% if computed_pending_signed > 0 %}
+                        <strong style="color: var(--success);">{{ computed_pending_signed|abs|currency_inr }}</strong>
+                        <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--success);">Client needs to pay me (total)</div>
+                    {% elif computed_pending_signed < 0 %}
+                        <strong style="color: var(--danger);">{{ computed_pending_signed|abs|currency_inr }}</strong>
+                        <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--danger);">I need to pay client (total)</div>
+                    {% else %}
+                        <span style="color: var(--muted);">₹0</span>
+                        <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--muted);">Settled</div>
+                    {% endif %}
+                {% elif account.pending_balance %}
                     {% if account.pending_balance > 0 %}
                         <strong style="color: var(--success);">{{ account.pending_balance|abs|currency_inr }}</strong>
                         <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--success);">Client loss (net) for {{ account.exchange.name }}</div>

@@ -34,22 +34,30 @@
         {% csrf_token %}
 
         <div>
+            <label style="display:block; font-size: 13px; color: var(--muted); margin-bottom: 6px;">Type</label>
+            <select class="field-input" name="tx_type">
+                <option value="RECEIVED" {% if pending_display >= 0 %}selected{% endif %}>Received (client paid me)</option>
+                <option value="GIVEN" {% if pending_display < 0 %}selected{% endif %}>Paid (I paid client)</option>
+            </select>
+            <div style="font-size: 12px; color: var(--muted); margin-top: 6px;">
+                Default matches pending direction; change here if you need the other type.
+            </div>
+        </div>
+
+        <div>
             <label style="display:block; font-size: 13px; color: var(--muted); margin-bottom: 6px;">Amount</label>
-            <input class="field-input" name="amount" type="number" min="1" value="{{ max_amount }}" {% if max_amount == 0 %}disabled{% endif %} />
+            <input class="field-input" name="amount" type="number" min="1" value="{% if max_amount == 0 %}{% else %}{{ max_amount }}{% endif %}" />
         </div>
 
         <div>
             <label style="display:block; font-size: 13px; color: var(--muted); margin-bottom: 6px;">Notes (optional)</label>
-            <input class="field-input" name="notes" type="text" placeholder="Settlement note..." {% if max_amount == 0 %}disabled{% endif %} />
+            <input class="field-input" name="notes" type="text" placeholder="Settlement note..." />
         </div>
 
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-            <button type="submit" class="btn btn-primary" {% if max_amount == 0 %}disabled{% endif %}>
+            <button type="submit" class="btn btn-primary">
                 Record settlement
             </button>
-            <div style="font-size: 12px; color: var(--muted);">
-                Max allowed: {{ max_amount|currency_inr }}.
-            </div>
         </div>
     </form>
 </div>

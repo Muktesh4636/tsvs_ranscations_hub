@@ -833,6 +833,70 @@ class Transaction(TimeStampedModel):
             self.sequence_no = max_seq + 1
         super().save(*args, **kwargs)
 
+        # If this is a "Dues generated" audit transaction, keep pending balances in sync.
+        # (Dues affect pending, but they are not PendingPaymentTransaction rows.)
+        try:
+            notes = (self.notes or "").lower()
+            if self.type == "RECORD_PAYMENT" and ("dues generated" in notes or "backfilled dues audit" in notes):
+                from django.db.models import Sum, Q
+                from django.db import transaction as db_transaction
+
+                with db_transaction.atomic():
+                    acc = (
+                        ClientExchangeAccount.objects.select_for_update()
+                        .select_related("client")
+                        .get(pk=self.client_exchange_id)
+                    )
+
+                    dues_signed_total = (
+                        Transaction.objects.filter(
+                            client_exchange=acc,
+                            type="RECORD_PAYMENT",
+                        )
+                        .filter(Q(notes__icontains="Dues generated") | Q(notes__icontains="Backfilled dues audit"))
+                        .aggregate(total=Sum("amount"))["total"]
+                        or 0
+                    )
+                    given_total = (
+                        PendingPaymentTransaction.objects.filter(client_exchange=acc, type="GIVEN")
+                        .aggregate(total=Sum("amount"))["total"]
+                        or 0
+                    )
+                    received_total = (
+                        PendingPaymentTransaction.objects.filter(client_exchange=acc, type="RECEIVED")
+                        .aggregate(total=Sum("amount"))["total"]
+                        or 0
+                    )
+                    acc.pending_balance = int(dues_signed_total) + int(given_total) - int(received_total)
+                    acc.save(update_fields=["pending_balance"])
+
+                    client = Client.objects.select_for_update().get(pk=acc.client_id)
+                    accounts_sum = (
+                        ClientExchangeAccount.objects.filter(client_id=client.id).aggregate(total=Sum("pending_balance"))[
+                            "total"
+                        ]
+                        or 0
+                    )
+                    legacy_given = (
+                        PendingPaymentTransaction.objects.filter(
+                            client_id=client.id, client_exchange__isnull=True, type="GIVEN"
+                        )
+                        .aggregate(total=Sum("amount"))["total"]
+                        or 0
+                    )
+                    legacy_received = (
+                        PendingPaymentTransaction.objects.filter(
+                            client_id=client.id, client_exchange__isnull=True, type="RECEIVED"
+                        )
+                        .aggregate(total=Sum("amount"))["total"]
+                        or 0
+                    )
+                    client.pending_balance = int(accounts_sum) + int(legacy_given) - int(legacy_received)
+                    client.save(update_fields=["pending_balance"])
+        except Exception:
+            # Never block audit saves due to sync issues.
+            pass
+
 
 class EmailOTP(TimeStampedModel):
     """
@@ -925,75 +989,139 @@ class PendingPaymentTransaction(TimeStampedModel):
 
     def save(self, *args, **kwargs):
         """
-        Live Running Balance Logic:
-        BALANCE = TOTAL_GIVEN - TOTAL_RECEIVED
+        Client-payments pending balance sync.
+
+        We recompute balances after each write so they stay consistent with the
+        UI logic:
+          pending = dues_signed_total (from RECORD_PAYMENT audit) + (given - received)
         """
         is_new = self.pk is None
-        old_amount = 0
-        old_type = None
-        old_client_exchange = None
+        old_client_id = None
+        old_client_exchange_id = None
         
         if not is_new:
-            # Get the original transaction to reverse its effect
-            old_instance = PendingPaymentTransaction.objects.get(pk=self.pk)
-            old_amount = old_instance.amount
-            old_type = old_instance.type
-            old_client_exchange = old_instance.client_exchange
+            old_instance = PendingPaymentTransaction.objects.select_related("client_exchange").get(pk=self.pk)
+            old_client_id = old_instance.client_id
+            old_client_exchange_id = old_instance.client_exchange_id
 
         # Use atomic transaction to ensure balance consistency
         from django.db import transaction as db_transaction
+        from django.db.models import Sum, Q
         with db_transaction.atomic():
-            # 1. Reverse old effect if editing
-            if not is_new:
-                if old_type == 'GIVEN':
-                    self.client.pending_balance -= old_amount
-                elif old_type == 'RECEIVED':
-                    self.client.pending_balance += old_amount
-
-                if old_client_exchange:
-                    if old_type == 'GIVEN':
-                        old_client_exchange.pending_balance -= old_amount
-                    elif old_type == 'RECEIVED':
-                        old_client_exchange.pending_balance += old_amount
-                    old_client_exchange.save(update_fields=['pending_balance'])
-            
-            # 2. Apply new effect
-            if self.type == 'GIVEN':
-                self.client.pending_balance += self.amount
-            elif self.type == 'RECEIVED':
-                self.client.pending_balance -= self.amount
-
-            if self.client_exchange:
-                if self.type == 'GIVEN':
-                    self.client_exchange.pending_balance += self.amount
-                elif self.type == 'RECEIVED':
-                    self.client_exchange.pending_balance -= self.amount
-                self.client_exchange.save(update_fields=['pending_balance'])
-            
-            # 3. Save client and transaction
-            self.client.save(update_fields=['pending_balance'])
             super().save(*args, **kwargs)
+
+            # Recompute pending for affected exchange accounts (old + new)
+            affected_account_ids = {old_client_exchange_id, self.client_exchange_id}
+            affected_account_ids = {aid for aid in affected_account_ids if aid}
+            if affected_account_ids:
+                # Lock accounts
+                accounts = (
+                    ClientExchangeAccount.objects.select_for_update()
+                    .filter(id__in=affected_account_ids)
+                    .select_related("client")
+                )
+                for acc in accounts:
+                    dues_signed_total = (
+                        Transaction.objects.filter(
+                            client_exchange=acc,
+                            type="RECORD_PAYMENT",
+                        )
+                        .filter(Q(notes__icontains="Dues generated") | Q(notes__icontains="Backfilled dues audit"))
+                        .aggregate(total=Sum("amount"))["total"]
+                        or 0
+                    )
+                    given_total = (
+                        PendingPaymentTransaction.objects.filter(client_exchange=acc, type="GIVEN")
+                        .aggregate(total=Sum("amount"))["total"]
+                        or 0
+                    )
+                    received_total = (
+                        PendingPaymentTransaction.objects.filter(client_exchange=acc, type="RECEIVED")
+                        .aggregate(total=Sum("amount"))["total"]
+                        or 0
+                    )
+                    acc.pending_balance = int(dues_signed_total) + int(given_total) - int(received_total)
+                    acc.save(update_fields=["pending_balance"])
+
+            # Recompute pending for affected clients (old + new)
+            affected_client_ids = {old_client_id, self.client_id}
+            affected_client_ids = {cid for cid in affected_client_ids if cid}
+            for cid in affected_client_ids:
+                client = Client.objects.select_for_update().get(pk=cid)
+                accounts_sum = (
+                    ClientExchangeAccount.objects.filter(client_id=cid).aggregate(total=Sum("pending_balance"))["total"]
+                    or 0
+                )
+                legacy_given = (
+                    PendingPaymentTransaction.objects.filter(client_id=cid, client_exchange__isnull=True, type="GIVEN")
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                legacy_received = (
+                    PendingPaymentTransaction.objects.filter(
+                        client_id=cid, client_exchange__isnull=True, type="RECEIVED"
+                    )
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                client.pending_balance = int(accounts_sum) + int(legacy_given) - int(legacy_received)
+                client.save(update_fields=["pending_balance"])
 
     def delete(self, *args, **kwargs):
         """
-        Delete Transaction Logic:
-        Reverse the effect of the transaction on the client's balance.
+        Delete + recompute pending balances.
         """
         from django.db import transaction as db_transaction
+        from django.db.models import Sum, Q
         with db_transaction.atomic():
-            if self.type == 'GIVEN':
-                self.client.pending_balance -= self.amount
-            elif self.type == 'RECEIVED':
-                self.client.pending_balance += self.amount
-
-            if self.client_exchange:
-                if self.type == 'GIVEN':
-                    self.client_exchange.pending_balance -= self.amount
-                elif self.type == 'RECEIVED':
-                    self.client_exchange.pending_balance += self.amount
-                self.client_exchange.save(update_fields=['pending_balance'])
-            
-            self.client.save(update_fields=['pending_balance'])
+            client_id = self.client_id
+            account_id = self.client_exchange_id
             super().delete(*args, **kwargs)
+
+            if account_id:
+                acc = ClientExchangeAccount.objects.select_for_update().get(pk=account_id)
+                dues_signed_total = (
+                    Transaction.objects.filter(
+                        client_exchange=acc,
+                        type="RECORD_PAYMENT",
+                    )
+                    .filter(Q(notes__icontains="Dues generated") | Q(notes__icontains="Backfilled dues audit"))
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                given_total = (
+                    PendingPaymentTransaction.objects.filter(client_exchange=acc, type="GIVEN")
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                received_total = (
+                    PendingPaymentTransaction.objects.filter(client_exchange=acc, type="RECEIVED")
+                    .aggregate(total=Sum("amount"))["total"]
+                    or 0
+                )
+                acc.pending_balance = int(dues_signed_total) + int(given_total) - int(received_total)
+                acc.save(update_fields=["pending_balance"])
+
+            client = Client.objects.select_for_update().get(pk=client_id)
+            accounts_sum = (
+                ClientExchangeAccount.objects.filter(client_id=client_id).aggregate(total=Sum("pending_balance"))["total"]
+                or 0
+            )
+            legacy_given = (
+                PendingPaymentTransaction.objects.filter(
+                    client_id=client_id, client_exchange__isnull=True, type="GIVEN"
+                )
+                .aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            legacy_received = (
+                PendingPaymentTransaction.objects.filter(
+                    client_id=client_id, client_exchange__isnull=True, type="RECEIVED"
+                )
+                .aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+            client.pending_balance = int(accounts_sum) + int(legacy_given) - int(legacy_received)
+            client.save(update_fields=["pending_balance"])
 
 
