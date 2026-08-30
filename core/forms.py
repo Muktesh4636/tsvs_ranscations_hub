@@ -4,10 +4,55 @@ Forms for the Profit-Loss-Share-Settlement System
 from django import forms
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
+from django.contrib.auth.forms import PasswordChangeForm, PasswordResetForm, SetPasswordForm
 from decimal import Decimal
 from .models import Client, Exchange, ClientExchangeAccount, Transaction, EmailOTP
 
 User = get_user_model()
+
+
+class UserProfileForm(forms.ModelForm):
+    """Edit logged-in user's display name and email."""
+
+    class Meta:
+        model = User
+        fields = ["first_name", "last_name", "email"]
+        widgets = {
+            "first_name": forms.TextInput(attrs={"class": "field-input"}),
+            "last_name": forms.TextInput(attrs={"class": "field-input"}),
+            "email": forms.EmailInput(attrs={"class": "field-input"}),
+        }
+
+
+class ChipPasswordChangeForm(PasswordChangeForm):
+    """Password change with app styling (no extra password rules)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for _name, field in self.fields.items():
+            field.widget.attrs.setdefault("class", "field-input")
+        self.fields["new_password1"].help_text = ""
+
+
+class ChipPasswordResetForm(PasswordResetForm):
+    """Forgot-password request: styled email field."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["email"].widget.attrs.setdefault("class", "field-input")
+        self.fields["email"].widget.attrs.setdefault("style", "max-width: 100%; height: 60px; font-size: 20px; padding: 0 20px;")
+        self.fields["email"].widget.attrs.setdefault("autocomplete", "email")
+        self.fields["email"].widget.attrs.setdefault("placeholder", "name@company.com")
+        self.fields["email"].label = "Email address"
+
+
+class ChipSetPasswordForm(SetPasswordForm):
+    """Set new password after reset link: styled fields."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for _name, field in self.fields.items():
+            field.widget.attrs.setdefault("class", "field-input")
 
 
 class ClientForm(forms.ModelForm):
@@ -265,17 +310,17 @@ class SignupForm(forms.Form):
 class OTPVerificationForm(forms.Form):
     """Form for verifying OTP code."""
     otp_code = forms.CharField(
-        max_length=6,
-        min_length=6,
+        max_length=4,
+        min_length=4,
         required=True,
         widget=forms.TextInput(attrs={
             'class': 'field-input',
-            'placeholder': 'Enter 6-digit OTP',
+            'placeholder': 'Enter 4-digit OTP',
             'autofocus': True,
-            'maxlength': '6',
-            'pattern': '[0-9]{6}'
+            'maxlength': '4',
+            'pattern': '[0-9]{4}'
         }),
-        help_text="Enter the 6-digit code sent to your email."
+        help_text="Enter the 4-digit code sent to your email."
     )
     
     def __init__(self, *args, **kwargs):

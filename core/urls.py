@@ -1,10 +1,12 @@
 """
 URL configuration for core app
 """
-from django.urls import path, include
+from django.urls import path, include, reverse_lazy
+from django.contrib.auth import views as auth_views
 from django.http import HttpResponseRedirect
 from rest_framework.routers import DefaultRouter
 from . import views, api_views
+from .forms import ChipPasswordResetForm, ChipSetPasswordForm
 
 # API Router
 router = DefaultRouter()
@@ -45,6 +47,7 @@ urlpatterns = [
     path('api/accounts/<int:account_id>/report-config/', api_views.api_account_report_config, name='api-account-report-config'),
     path('api/clients/<int:pk>/delete/', api_views.api_delete_client, name='api-client-delete-mobile'),
     path('api/mobile-logs/', api_views.api_submit_mobile_log, name='api-submit-mobile-log'),
+    path('api/backups/status/', api_views.api_backup_status, name='api-backup-status'),
     path('api/', include(router.urls)),  # Changed from '' to 'api/' to avoid conflict
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
     path('api/token-auth/', include('rest_framework.urls')), # Simplified for token login later
@@ -52,6 +55,52 @@ urlpatterns = [
     # Authentication
     path('login/', views.login_view, name='login'),
     path('logout/', views.logout_view, name='logout'),
+    path('account/profile/', views.user_profile, name='user_profile'),
+    path(
+        'account/password-change/',
+        views.PasswordChangeWithNotificationView.as_view(),
+        name='password_change',
+    ),
+    path(
+        'account/password-change/done/',
+        auth_views.PasswordChangeDoneView.as_view(
+            template_name='core/auth/password_change_done.html',
+        ),
+        name='password_change_done',
+    ),
+    path(
+        'account/password-reset/',
+        auth_views.PasswordResetView.as_view(
+            template_name='core/auth/password_reset_form.html',
+            email_template_name='core/auth/password_reset_email.txt',
+            subject_template_name='core/auth/password_reset_subject.txt',
+            success_url=reverse_lazy('password_reset_done'),
+        ),
+        name='password_reset',
+    ),
+    path(
+        'account/password-reset/done/',
+        auth_views.PasswordResetDoneView.as_view(
+            template_name='core/auth/password_reset_done.html',
+        ),
+        name='password_reset_done',
+    ),
+    path(
+        'account/reset/<uidb64>/<token>/',
+        views.PasswordResetConfirmWithAdminNotifyView.as_view(
+            form_class=ChipSetPasswordForm,
+            template_name='core/auth/password_reset_confirm.html',
+            success_url=reverse_lazy('password_reset_complete'),
+        ),
+        name='password_reset_confirm',
+    ),
+    path(
+        'account/reset/done/',
+        auth_views.PasswordResetCompleteView.as_view(
+            template_name='core/auth/password_reset_complete.html',
+        ),
+        name='password_reset_complete',
+    ),
     path('signup/', views.signup_view, name='signup'),
     path('verify-otp/', views.verify_otp_view, name='verify_otp'),
     path('resend-otp/', views.resend_otp_view, name='resend_otp'),

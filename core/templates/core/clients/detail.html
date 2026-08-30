@@ -85,7 +85,9 @@
                 {{ item.exchange_label }}
             </a>
             <span style="display: flex; align-items: center; gap: 8px;">
-                {% if item.client_owes_me %}
+                {% if item.remaining == 0 or item.client_owes_me is None %}
+                <span style="color: var(--muted); font-weight: 500;">Settled {{ 0|currency_inr }}</span>
+                {% elif item.client_owes_me %}
                 <span style="color: var(--success); font-weight: 500;">Client needs to pay me {{ item.remaining|currency_inr }}</span>
                 {% else %}
                 <span style="color: var(--danger); font-weight: 500;">I need to pay client {{ item.remaining|currency_inr }}</span>

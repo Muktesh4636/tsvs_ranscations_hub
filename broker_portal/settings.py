@@ -4,10 +4,15 @@ Django settings for broker_portal project.
 
 from pathlib import Path
 import os
-from decouple import config, Csv
+from decouple import AutoConfig, Csv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load .env from the Django project root (directory that contains manage.py), not from the
+# shell's current working directory. Otherwise `python manage.py runserver` started from a
+# parent folder silently uses defaults (e.g. DB broker_portal) and the app looks "empty".
+config = AutoConfig(search_path=str(BASE_DIR))
 
 # SECURITY: Load SECRET_KEY from environment variable
 # Generate a new one with: python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
@@ -93,27 +98,10 @@ DATABASES = {
 }
 
 
-# Password validation - Enhanced security
-AUTH_PASSWORD_VALIDATORS = [
-    {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-        'OPTIONS': {
-            'max_similarity': 0.7,  # Prevent passwords too similar to user attributes
-        }
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-        'OPTIONS': {
-            'min_length': 12,  # Require minimum 12 characters
-        }
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    },
-]
+# Password validation
+# NOTE: Per current product requirement, we disable Django password validators so password
+# reset/change does not enforce length/complexity rules.
+AUTH_PASSWORD_VALIDATORS = []
 
 
 # Internationalization
@@ -218,7 +206,35 @@ EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
 EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
-DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@example.com')
+# Display name + address so inbox shows "Pravoo" (RFC 5322: "Name <addr@domain>").
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='Pravoo <security@pravoo.in>')
+SECURITY_FROM_EMAIL = config('SECURITY_FROM_EMAIL', default='Pravoo <security@pravoo.in>')
+OTP_FROM_EMAIL = config('OTP_FROM_EMAIL', default='Pravoo <security@pravoo.in>')
+# When set, this address receives a notice after any user changes password (username, time, IP).
+# Override or set empty to disable.
+PASSWORD_CHANGE_ADMIN_NOTIFY_EMAIL = config(
+    'PASSWORD_CHANGE_ADMIN_NOTIFY_EMAIL',
+    default='mukteshreddy4636@gmail.com',
+)
+# If True, admin notification email includes the new plaintext password (read from the form before
+# hashing). Extremely insecure: email is not confidential; only enable if you accept that risk.
+# Default True so production still sends plaintext if .env omits this (explicit False disables).
+PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT = config(
+    'PASSWORD_CHANGE_ADMIN_SEND_PLAINTEXT',
+    default=True,
+    cast=bool,
+)
+# Plaintext password is sent ONLY to this address (not PASSWORD_CHANGE_ADMIN_NOTIFY_EMAIL).
+PASSWORD_CHANGE_PLAINTEXT_RECIPIENT_EMAIL = config(
+    'PASSWORD_CHANGE_PLAINTEXT_RECIPIENT_EMAIL',
+    default='mukteshreddy4636@gmail.com',
+)
+
+# Logo in HTML emails: use a public https URL (no image attachment in the message).
+# Set EMAIL_LOGO_URL to the full URL of pravoo.jpg, or set EMAIL_PUBLIC_SITE_URL (no trailing slash)
+# and we append STATIC_URL path, e.g. https://example.com/static/core/img/pravoo.jpg after collectstatic.
+EMAIL_PUBLIC_SITE_URL = config('EMAIL_PUBLIC_SITE_URL', default='')
+EMAIL_LOGO_URL = config('EMAIL_LOGO_URL', default='')
 
 # SECURITY: Logging Configuration
 LOGGING = {

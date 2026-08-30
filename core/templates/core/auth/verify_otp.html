@@ -7,7 +7,7 @@
     <div style="background: var(--bg-content); border-radius: 8px; padding: 32px; border: 1px solid var(--border);">
         <h2 style="font-size: 24px; font-weight: 600; margin-bottom: 8px; text-align: center;">Verify Your Email</h2>
         <p style="text-align: center; color: var(--muted); font-size: 14px; margin-bottom: 24px;">
-            We've sent a 6-digit verification code to<br>
+            We've sent a 4-digit verification code to<br>
             <strong>{{ email }}</strong>
         </p>
         
@@ -70,9 +70,9 @@
             otpInput.addEventListener('input', function(e) {
                 // Only allow digits
                 this.value = this.value.replace(/[^0-9]/g, '');
-                // Limit to 6 digits
-                if (this.value.length > 6) {
-                    this.value = this.value.slice(0, 6);
+                // Limit to 4 digits
+                if (this.value.length > 4) {
+                    this.value = this.value.slice(0, 4);
                 }
             });
         }

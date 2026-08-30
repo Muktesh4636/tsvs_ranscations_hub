@@ -16,6 +16,10 @@ from .serializers import (
     ClientExchangeAccountSerializer, TransactionSerializer
 )
 from .views import calculate_display_remaining
+from django.conf import settings
+from pathlib import Path
+import json
+import os
 
 @api_view(['GET'])
 @permission_classes([])  # Allow unauthenticated access to API root
@@ -29,9 +33,84 @@ def api_root(request):
         'login': reverse('api-login', request=request),
         'mobile-dashboard': reverse('api-mobile-dashboard', request=request),
         'pending-payments': reverse('api-pending-payments', request=request),
+        'backup-status': reverse('api-backup-status', request=request),
         'mobile-logs': reverse('api-submit-mobile-log', request=request),
         'message': 'API endpoints require authentication. Use /api/login/ to obtain a token.',
     })
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def api_backup_status(request):
+    """
+    Report the last backup status (success/failure + timestamps).
+
+    This endpoint reads a JSON status file written by the backup scheduler script.
+    """
+    # Preferred: explicit env var (lets server choose)
+    env_path = (os.environ.get("BACKUP_STATUS_PATH") or "").strip()
+
+    # Common defaults (server + local)
+    candidates = []
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.extend([
+        Path("/root/chip_3_backups/backup_status.json"),
+        Path(settings.BASE_DIR) / "backups" / "backup_status.json",
+        Path(settings.BASE_DIR).parent / "backups" / "backup_status.json",
+    ])
+
+    status_path = None
+    for p in candidates:
+        try:
+            if p.exists() and p.is_file():
+                status_path = p
+                break
+        except Exception:
+            continue
+
+    if not status_path:
+        return Response(
+            {
+                "ok": False,
+                "message": "No backup status file found. Configure BACKUP_STATUS_PATH or enable the backup scheduler status writer.",
+                "checked_paths": [str(p) for p in candidates],
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        raw = status_path.read_text(encoding="utf-8")
+        data = json.loads(raw) if raw.strip() else {}
+    except Exception as e:
+        return Response(
+            {
+                "ok": False,
+                "message": "Backup status file exists but could not be read/parsed.",
+                "status_file": str(status_path),
+                "error": str(e),
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    # Optional: also surface latest tar.gz in the same folder (best effort)
+    latest_tar = None
+    try:
+        base_dir = status_path.parent
+        tars = sorted(base_dir.glob("backup_*.tar.gz"), key=lambda x: x.stat().st_mtime, reverse=True)
+        if tars:
+            latest_tar = str(tars[0])
+    except Exception:
+        latest_tar = None
+
+    return Response(
+        {
+            "ok": bool(data.get("success", False)),
+            "status_file": str(status_path),
+            "latest_backup_tar": latest_tar or data.get("latest_backup_tar"),
+            "data": data,
+        }
+    )
 
 @api_view(['GET', 'POST'])
 @permission_classes([permissions.IsAuthenticated])

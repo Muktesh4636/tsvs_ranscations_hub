@@ -1,12 +1,56 @@
 #!/bin/bash
-# Backup scheduler: run backup every day, retain 90 days, optionally sync to remote server.
-# Deploy to server and run from cron daily (e.g. 2 AM): 0 2 * * * /root/backup_chip3_scheduled.sh
+# Backup scheduler: run backup every day, retain 100 days, optionally sync to remote server.
+# Deploy to server and run from cron daily (6 PM): 0 18 * * * /root/backup_chip3_scheduled.sh
 
 set -e
 
 BACKUP_SCRIPT="${BACKUP_SCRIPT:-/root/backup_chip3.sh}"
 BACKUP_BASE="${BACKUP_BASE:-/root/chip_3_backups}"
-RETENTION_DAYS="${RETENTION_DAYS:-90}"
+RETENTION_DAYS="${RETENTION_DAYS:-100}"
+STATUS_FILE="${BACKUP_STATUS_PATH:-${BACKUP_BASE}/backup_status.json}"
+STARTED_AT="$(date -Is)"
+
+write_status() {
+    local success="$1"
+    local exit_code="$2"
+    local finished_at="$3"
+    local latest=""
+    latest=$(ls -t "$BACKUP_BASE"/backup_*.tar.gz 2>/dev/null | head -n 1 || true)
+    python3 - <<PY || true
+import json, os, socket
+path = ${STATUS_FILE!r}
+data = {
+  "started_at": ${STARTED_AT!r},
+  "finished_at": ${finished_at!r},
+  "success": bool(${success}),
+  "exit_code": int(${exit_code}),
+  "backup_base": ${BACKUP_BASE!r},
+  "backup_script": ${BACKUP_SCRIPT!r},
+  "retention_days": int(${RETENTION_DAYS}),
+  "latest_backup_tar": ${latest!r},
+  "host": socket.gethostname(),
+}
+tmp = path + ".tmp"
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, sort_keys=True)
+    f.write("\\n")
+os.replace(tmp, path)
+PY
+}
+
+on_exit() {
+    code=$?
+    finished="$(date -Is)"
+    if [ "$code" -eq 0 ]; then
+        write_status "1" "$code" "$finished"
+    else
+        write_status "0" "$code" "$finished"
+    fi
+    exit "$code"
+}
+
+trap on_exit EXIT
 
 # Optional: source credentials for remote backup (create via setup_remote_backup.sh on server)
 REMOTE_ENV="${BACKUP_BASE}/.remote_backup_env"

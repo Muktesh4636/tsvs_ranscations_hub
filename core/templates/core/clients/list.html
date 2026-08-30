@@ -208,6 +208,7 @@ document.addEventListener('keydown', function(e) {
                         <a href="{% if request.resolver_match.url_name == 'payments_client_list' %}{% url 'payments_client_detail' client.pk %}{% else %}{% url 'client_detail' client.pk %}{% endif %}" class="btn btn-sm">View</a>
                         <form method="post" action="{% url 'client_delete' client.pk %}" style="display: inline;" onsubmit="return confirm('Are you sure you want to permanently delete client \"{{ client.name }}\"? This action cannot be undone and will delete all associated exchange accounts and transactions.');">
                             {% csrf_token %}
+                            <input type="hidden" name="next" value="{{ request.get_full_path }}" />
                             <button type="submit" class="btn btn-sm" style="background: #fee2e2; color: #991b1b; border: 1px solid #dc2626;">Delete</button>
                         </form>
                     </div>
