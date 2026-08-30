@@ -380,7 +380,7 @@
                 {% if profit_basis == 'pnl' %}
                     Your Share (PnL Snapshot)
                 {% else %}
-                    Your Total Profit
+                    Total Profit
                 {% endif %}
             </div>
             <div class="stat-value {% if your_total_profit >= 0 %}positive{% else %}negative{% endif %}">{{ your_total_profit|default:0|currency_inr }}</div>
@@ -485,40 +485,7 @@
 
 {% elif report_type == 'monthly' %}
 <!-- Monthly Report Section -->
-    <div class="chart-section">
-    <div class="chart-header">Monthly Trends (Last 6 Months)</div>
-    <div style="position: relative; height: 400px;">
-        <canvas id="monthlyTrendsChart"></canvas>
-        <div id="monthlyChartPlaceholder" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #999;">
-            <div style="font-size: 16px; margin-bottom: 8px;">No data available</div>
-            <div style="font-size: 14px;">Monthly trends will appear here once you have transaction data</div>
-        </div>
-    </div>
-</div>
-
-<div class="charts-grid">
-    <div class="chart-section">
-        <div class="chart-header">Transaction Type Breakdown</div>
-        <div style="position: relative; height: 320px;">
-            <canvas id="typeBreakdownChart"></canvas>
-            <div id="typeChartPlaceholder" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #999;">
-                <div style="font-size: 16px; margin-bottom: 8px;">No data available</div>
-                <div style="font-size: 14px;">Transaction breakdown will appear here</div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="chart-section">
-        <div class="chart-header">Weekly Trends (Last 4 Weeks)</div>
-        <div style="position: relative; height: 320px;">
-            <canvas id="weeklyTrendsChart"></canvas>
-            <div id="weeklyChartPlaceholder" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: #999;">
-                <div style="font-size: 16px; margin-bottom: 8px;">No data available</div>
-                <div style="font-size: 14px;">Weekly trends will appear here</div>
-            </div>
-        </div>
-    </div>
-</div>
+{# Monthly charts removed by request #}
 {% endif %}
 </div>
 

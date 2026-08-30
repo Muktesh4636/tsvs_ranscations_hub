@@ -616,15 +616,48 @@
             
             if (!displayInput || !hiddenInput) return;
             
-            // Format on input
+            function countDigitsLeftOfCaret(text, caretPos) {
+                let count = 0;
+                for (let i = 0; i < Math.min(text.length, caretPos); i++) {
+                    const ch = text[i];
+                    if (ch >= '0' && ch <= '9') count++;
+                }
+                return count;
+            }
+
+            function caretPosForDigits(text, digitsCount) {
+                if (digitsCount <= 0) return 0;
+                let count = 0;
+                for (let i = 0; i < text.length; i++) {
+                    const ch = text[i];
+                    if (ch >= '0' && ch <= '9') count++;
+                    if (count >= digitsCount) return i + 1;
+                }
+                return text.length;
+            }
+
+            // Format on input (preserve caret so editing feels natural)
             displayInput.addEventListener('input', function(e) {
-                let value = e.target.value.replace(/,/g, '').replace(/\D/g, '');
+                const rawText = e.target.value || '';
+                const caret = (typeof displayInput.selectionStart === 'number') ? displayInput.selectionStart : rawText.length;
+                const digitsLeft = countDigitsLeftOfCaret(rawText, caret);
+
+                let value = rawText.replace(/,/g, '').replace(/\D/g, '');
                 
                 if (value) {
                     // Format with commas for display
-                    displayInput.value = formatIndianNumber(value);
+                    const formatted = formatIndianNumber(value);
+                    displayInput.value = formatted;
                     // Store clean value in hidden input
                     hiddenInput.value = value;
+
+                    // Restore caret near where the user was typing
+                    const newCaret = caretPosForDigits(formatted, digitsLeft);
+                    try {
+                        displayInput.setSelectionRange(newCaret, newCaret);
+                    } catch (err) {
+                        // ignore for unsupported inputs
+                    }
                 } else {
                     displayInput.value = '';
                     hiddenInput.value = '';

@@ -74,6 +74,7 @@
             <table style="min-width: max-content; width: 100%;">
             <thead>
             <tr>
+                <th>Client</th>
                 <th>Period</th>
                 <th>U_CODE</th>
                 <th>Master</th>
@@ -88,6 +89,9 @@
             <tbody>
                 {% for item in clients_owe_you %}
                 <tr>
+                    <td>
+                        <span style="font-weight: 600;">{{ item.client.name }}</span>
+                    </td>
                     <td>
                         {{ today|date:"Y-m-d" }}
                     </td>
@@ -120,7 +124,6 @@
                     <td>{{ item.share_percentage }}%</td>
                     <td>
                         {% if not item.show_na %}
-                            <a href="{% url 'pending_payment_settlement' item.account.pk item.account.exchange.get_slug %}" class="btn btn-sm btn-primary" style="margin-right: 4px;">Record Real Payment</a>
                         {% endif %}
                         <a href="{% if request.resolver_match.url_name == 'payments_settlements_list' %}{% url 'payments_exchange_account_detail' item.account.pk item.account.exchange.get_slug %}{% else %}{% url 'exchange_account_detail' item.account.pk %}{% endif %}" class="btn btn-sm" style="margin-right: 4px;">View Account</a>
                         <a href="{% url 'export_client_pending_csv' item.client.pk %}" class="btn btn-sm" style="background: var(--success); color: white;" title="Download CSV for {{ item.client.name }}">📥 CSV</a>
@@ -153,6 +156,7 @@
             <table style="min-width: max-content; width: 100%;">
             <thead>
             <tr>
+                <th>Client</th>
                 <th>Period</th>
                 <th>U_CODE</th>
                 <th>Master</th>
@@ -167,6 +171,9 @@
             <tbody>
                 {% for item in you_owe_clients %}
                 <tr>
+                    <td>
+                        <span style="font-weight: 600;">{{ item.client.name }}</span>
+                    </td>
                     <td>
                         {{ today|date:"Y-m-d" }}
                     </td>
@@ -199,7 +206,6 @@
                     <td>{{ item.share_percentage }}%</td>
                     <td>
                         {% if not item.show_na %}
-                            <a href="{% url 'pending_payment_settlement' item.account.pk item.account.exchange.get_slug %}" class="btn btn-sm btn-primary" style="margin-right: 4px;">Record Real Payment</a>
                         {% endif %}
                         <a href="{% if request.resolver_match.url_name == 'payments_settlements_list' %}{% url 'payments_exchange_account_detail' item.account.pk item.account.exchange.get_slug %}{% else %}{% url 'exchange_account_detail' item.account.pk %}{% endif %}" class="btn btn-sm" style="margin-right: 4px;">View Account</a>
                         <a href="{% url 'export_client_pending_csv' item.client.pk %}" class="btn btn-sm" style="background: var(--success); color: white;" title="Download CSV for {{ item.client.name }}">📥 CSV</a>

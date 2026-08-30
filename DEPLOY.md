@@ -78,6 +78,14 @@ cd chip-3 && rsync -avz --exclude='venv/' --exclude='__pycache__/' --exclude='*.
 - **Path:** /root/chip_3
 - **Service:** chip-broker.service (Gunicorn)
 
+## Scheduled backups (optional)
+
+Backups run **daily** with **90-day retention**. See [BACKUP_SCHEDULE.md](BACKUP_SCHEDULE.md). One-time setup on the server after deploy:
+
+```bash
+cd /root/chip_3 && ./scripts/install_backup_schedule_on_server.sh
+```
+
 ## Notes
 
 - The `.env` file is excluded from sync (contains sensitive credentials)

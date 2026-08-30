@@ -68,50 +68,37 @@
                 {% endif %}
             </div>
         </div>
+        {% if request.resolver_match.url_name != 'payments_exchange_account_detail' %}
         <div class="card">
             <div class="card-title">Remaining Settlement</div>
             <div class="card-value">
-                {% if request.resolver_match.url_name == 'payments_exchange_account_detail' %}
+                {% if remaining.remaining == 0 %}
                     {% if account.pending_balance %}
                         {% if account.pending_balance > 0 %}
                             <strong style="color: var(--success);">{{ account.pending_balance|abs|currency_inr }}</strong>
-                            <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--success);">Client needs to pay me</div>
+                            <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--success);">Client is in loss (client owes you)</div>
                         {% else %}
                             <strong style="color: var(--danger);">{{ account.pending_balance|abs|currency_inr }}</strong>
-                            <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--danger);">I need to pay client</div>
+                            <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--danger);">Client is in profit (you owe client)</div>
                         {% endif %}
                     {% else %}
                         <span style="color: var(--muted);">₹0</span>
                         <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--muted);">Settled</div>
                     {% endif %}
                 {% else %}
-                    {% if remaining.remaining == 0 %}
-                        {% if account.pending_balance %}
-                            {% if account.pending_balance > 0 %}
-                                <strong style="color: var(--success);">{{ account.pending_balance|abs|currency_inr }}</strong>
-                                <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--success);">Client is in loss (client owes you)</div>
-                            {% else %}
-                                <strong style="color: var(--danger);">{{ account.pending_balance|abs|currency_inr }}</strong>
-                                <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--danger);">Client is in profit (you owe client)</div>
-                            {% endif %}
-                        {% else %}
-                            <span style="color: var(--muted);">₹0</span>
-                            <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--muted);">Settled</div>
-                        {% endif %}
+                    {% if pnl > 0 %}
+                        <strong style="color: var(--danger);">{{ remaining.remaining|currency_inr }}</strong>
+                        <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--danger);">I need to pay client</div>
+                    {% elif pnl < 0 %}
+                        <strong style="color: var(--success);">{{ remaining.remaining|currency_inr }}</strong>
+                        <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--success);">Client needs to pay me</div>
                     {% else %}
-                        {% if pnl > 0 %}
-                            <strong style="color: var(--danger);">{{ remaining.remaining|currency_inr }}</strong>
-                            <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--danger);">I need to pay client</div>
-                        {% elif pnl < 0 %}
-                            <strong style="color: var(--success);">{{ remaining.remaining|currency_inr }}</strong>
-                            <div style="font-size: 12px; font-weight: normal; margin-top: 4px; color: var(--success);">Client needs to pay me</div>
-                        {% else %}
-                            <span style="color: var(--muted);">₹0</span>
-                        {% endif %}
+                        <span style="color: var(--muted);">₹0</span>
                     {% endif %}
                 {% endif %}
             </div>
         </div>
+        {% endif %}
         <div class="card">
             <div class="card-title">Pending payment</div>
             <div class="card-value">

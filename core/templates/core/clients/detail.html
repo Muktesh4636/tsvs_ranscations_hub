@@ -79,8 +79,11 @@
     {% if exchange_settlements %}
     <ul style="list-style: none; padding: 0; margin: 0;">
         {% for item in exchange_settlements %}
-        <li style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap;">
-            <span style="font-weight: 600;">{{ item.exchange_label }}</span>
+        <li style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap; cursor: pointer;"
+            onclick="window.location='{% url 'payments_exchange_account_detail' item.account.pk item.account.exchange.get_slug %}'">
+            <a href="{% url 'payments_exchange_account_detail' item.account.pk item.account.exchange.get_slug %}" style="font-weight: 600; color: var(--accent); text-decoration: none;">
+                {{ item.exchange_label }}
+            </a>
             <span style="display: flex; align-items: center; gap: 8px;">
                 {% if item.client_owes_me %}
                 <span style="color: var(--success); font-weight: 500;">Client needs to pay me {{ item.remaining|currency_inr }}</span>
@@ -104,6 +107,7 @@
 </div>
 {% endif %}
 
+{% if request.resolver_match.url_name != 'payments_client_detail' %}
 <!-- Exchanges Section -->
 {% if accounts %}
 <div style="background: var(--bg-content); border-radius: 8px; padding: 0; border: 1px solid var(--border); margin-bottom: 24px; overflow: hidden;">
@@ -130,7 +134,7 @@
                 {% with pnl=account.compute_client_pnl share=account.compute_my_share %}
                 <tr>
                     <td>
-                        <a href="{% if request.resolver_match.url_name == 'payments_client_detail' %}{% url 'payments_exchange_account_detail' account.pk account.exchange.get_slug %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" style="color: var(--accent); text-decoration: none; font-weight: 500;">
+                        <a href="{% url 'exchange_account_detail' account.pk %}" style="color: var(--accent); text-decoration: none; font-weight: 500;">
                             {{ account.exchange.name }}{% if account.exchange.code %} ({{ account.exchange.code }}){% endif %}
                         </a>
                     </td>
@@ -150,24 +154,13 @@
                         {% if pnl == 0 %}
                             <span style="color: var(--muted);">N.A</span>
                         {% else %}
-                            {% if request.resolver_match.url_name == 'payments_client_detail' %}
-                                {{ account.display_my_share|default:0|currency_inr }}
-                            {% else %}
-                                {{ share|currency_inr }}
-                            {% endif %}
+                            {{ share|currency_inr }}
                         {% endif %}
                     </td>
-                    <td>
-                        {% if request.resolver_match.url_name == 'payments_client_detail' %}
-                            {{ account.display_my_pct|default:account.my_percentage|floatformat:2 }}%
-                        {% else %}
-                            {{ account.my_percentage|floatformat:2 }}%
-                        {% endif %}
-                    </td>
+                    <td>{{ account.my_percentage|floatformat:2 }}%</td>
                         <td>
                             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                                <a href="{% if request.resolver_match.url_name == 'payments_client_detail' %}{% url 'payments_exchange_account_detail' account.pk account.exchange.get_slug %}{% else %}{% url 'exchange_account_detail' account.pk %}{% endif %}" class="btn btn-sm">View</a>
-                                {% if request.resolver_match.url_name != 'payments_client_detail' %}
+                                <a href="{% url 'exchange_account_detail' account.pk %}" class="btn btn-sm">View</a>
                                 <form method="post" action="{% url 'client_exchange_delete' account.pk %}" style="display: inline;" onsubmit="return confirm('Delete this exchange account? This will permanently delete ALL transactions/settlements for this account.');">
                                     {% csrf_token %}
                                     <input type="hidden" name="next" value="{{ request.get_full_path }}" />
@@ -175,7 +168,6 @@
                                         Delete
                                     </button>
                                 </form>
-                                {% endif %}
                             </div>
                         </td>
                 </tr>
@@ -189,15 +181,10 @@
 <div style="background: var(--bg-content); border-radius: 8px; padding: 40px; border: 1px solid var(--border); text-align: center; color: var(--muted);">
     <div style="font-size: 16px; margin-bottom: 8px;">No Exchange Accounts</div>
     <div style="font-size: 14px; margin-bottom: 16px;">
-        {% if request.resolver_match.url_name == 'payments_client_detail' %}
-            This client has no exchange accounts configured.
-        {% else %}
-            Link an exchange to get started
-        {% endif %}
+        Link an exchange to get started
     </div>
-    {% if request.resolver_match.url_name != 'payments_client_detail' %}
-        <a href="{% url 'exchange_link' %}?client={{ client.pk }}" class="btn btn-primary">Link Exchange</a>
-    {% endif %}
+    <a href="{% url 'exchange_link' %}?client={{ client.pk }}" class="btn btn-primary">Link Exchange</a>
 </div>
+{% endif %}
 {% endif %}
 {% endblock %}
