@@ -49,3 +49,6 @@ security.log
 *.log
 
 
+backups/*.sql
+backups/*.json
+backups/*.dump
